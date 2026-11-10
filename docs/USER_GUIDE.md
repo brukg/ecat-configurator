@@ -94,6 +94,19 @@ Documents are completely independent. Editing one never changes another.
   upstream device and its port (B, C or D). *Network › Make topology linear*
   resets the chain. *Master › Topology* draws the tree.
 
+### Undo, redo, copy and paste
+
+- **Edit › Undo / Redo** (Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z, and ⟲ ⟳ in the toolbar)
+  steps through the changes of the active document. Each document has its own
+  history of up to 100 steps. Typing in a field or dragging a value counts as one
+  step; every other action (add, remove, move, paste, toggle…) is a step of its own.
+  While a text field has focus, Ctrl+Z undoes the typing in that field instead.
+- **Cut / Copy / Paste / Duplicate** (Ctrl+X / C / V / D) work on the selected slave
+  in the tree, with all its settings: PDOs, modules, start-up commands and DC.
+  The copy gets a free station address and is inserted after the selected slave.
+  Copied slaves are also placed on the system clipboard, so they can be pasted into
+  another document or another running copy of the program.
+
 ## Slave pages
 
 ### General
@@ -267,6 +280,9 @@ The scan is available on Linux and needs `CAP_NET_RAW`; see the README.
 | Ctrl+S | save the active document |
 | Ctrl+E | export ENI |
 | Delete | remove the selected slave (when not typing in a field) |
+| Ctrl+Z / Ctrl+Y | undo / redo (Ctrl+Shift+Z also redoes) |
+| Ctrl+X / Ctrl+C / Ctrl+V | cut / copy / paste the selected slave |
+| Ctrl+D | duplicate the selected slave |
 
 ## What the generated ENI contains
 

@@ -34,6 +34,8 @@ ENI network information file (ETG.2100) for your EtherCAT master.
   create a configuration from the scan.
 - **Validation:** address clashes, conflicting PDOs, sync manager sizes, frame
   size, DC settings and more.
+- **Undo/redo and copy/paste:** per-document undo history (Ctrl+Z / Ctrl+Y). Cut, copy,
+  paste and duplicate slaves, also between documents and between running copies.
 - **Documents:** open several ENI or project files at the same time. Each one is
   an independent document.
 - **Workspace:** dockable tabs, side-by-side or stacked splits, floating panels and

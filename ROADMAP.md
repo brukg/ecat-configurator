@@ -30,6 +30,9 @@ whether a generated ENI works on real hardware at all.
    auto-increment addresses from port wiring (port order D, B, C) instead of the
    list order. Import topology from a scan.
 8. **Hot-connect groups and cable redundancy.**
-9. **Undo/redo and copy/paste** of slaves, PDO mappings and start-up commands.
+9. ~~**Undo/redo and copy/paste.**~~ Done in 0.5: per-document undo history and
+   cut/copy/paste/duplicate of slaves with all their settings (also between
+   documents and program instances). Still open: copying only a PDO mapping or
+   start-up list to several slaves at once.
 10. **Cross-platform.** Windows and macOS builds and packages, and a bus scan via
     Npcap/BPF. CI that builds, tests and packages every commit.
