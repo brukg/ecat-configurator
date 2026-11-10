@@ -6,3 +6,4 @@
 /shots/
 *.png
 !packaging/*.png
+!docs/images/*.png
