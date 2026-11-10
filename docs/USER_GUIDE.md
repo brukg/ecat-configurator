@@ -344,6 +344,12 @@ the configuration when you have not scanned):
   configurator sets up the slave's standard mailbox from its EEPROM and switches it
   to PREOP first. Expedited and normal transfers are supported; objects larger than
   one mailbox (segmented transfer) are not yet.
+- **Firmware (FoE)**: *Download firmware file…* sends a file to the slave with File
+  access over EtherCAT. Enter the file name the slave expects (defaults to the
+  file's name) and the password if the vendor uses one. The slave is switched to
+  BOOT using the bootstrap mailbox from its EEPROM, and the file is sent in
+  mailbox-sized packets, each acknowledged by the slave. The download asks for
+  confirmation first.
 
 ## Keyboard shortcuts
 

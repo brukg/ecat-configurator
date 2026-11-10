@@ -38,7 +38,8 @@ ENI network information file (ETG.2100) for your EtherCAT master.
   images as `.bin` or Intel HEX.
 - **Online:** scan a real bus on Linux and compare it with the configuration, or
   create a configuration from the scan. Commission single slaves: INIT/PREOP/BOOT,
-  AL status code and error counters, CoE SDO read/write, EEPROM read and write.
+  AL status code and error counters, CoE SDO read/write, EEPROM read and write, and
+  firmware download over FoE.
 - **Validation:** address clashes, conflicting PDOs, sync manager sizes, frame
   size, DC settings and more.
 - **Hot connect:** mark groups of slaves that may be missing or plugged in while

@@ -26,8 +26,8 @@ whether a generated ENI works on real hardware at all.
    segmented SDO, browsing the dictionary online (SDO info), DC delay measurement.
 6. **Other mailbox protocols in the ENI.** ~~SoE start-up IDNs and EoE IP
    settings~~ done in 0.7, ~~mailbox state polling (`MailboxStates`)~~ done in
-   0.11. Still open: FoE firmware download, and checking the EoE/SoE byte layout
-   against a real master (see item 2).
+   0.11, ~~FoE firmware download~~ done in 0.12 (on the Online page). Still open:
+   checking the EoE/SoE/FoE byte layout against real devices (see item 2).
 7. ~~**Correct topology handling for junctions.**~~ Done in 0.6: bus order and
    auto-increment addresses from the port wiring (D, B, C), automatic re-sorting,
    port-conflict and order checks, and wiring rebuilt from a scan.

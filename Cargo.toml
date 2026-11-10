@@ -1,6 +1,6 @@
 [package]
 name = "ecat-configurator"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 description = "Desktop EtherCAT network configurator: ESI device descriptions in, ENI network files out"
 license = "MIT"
