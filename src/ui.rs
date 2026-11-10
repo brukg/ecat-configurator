@@ -1615,6 +1615,9 @@ impl App {
                         "▪"
                     };
                     let mut text = format!("{} {} {}", mark, s.phys_addr, s.name);
+                    if let Some(h) = &s.hot_connect {
+                        text.push_str(&format!("  [hot connect ×{}]", h.members));
+                    }
                     if refc == Some(i) {
                         text.push_str("  ⏱");
                     }
@@ -3259,6 +3262,27 @@ impl App {
             });
             changed |= ui.checkbox(&mut s.check_serial, "Check serial number").changed();
             ui.add_space(8.0);
+            sub_header(ui, "Hot connect");
+            let rest = (names.len() - i) as u16;
+            let mut on = s.hot_connect.is_some();
+            if ui.checkbox(&mut on, "This slave starts a hot-connect group (may be missing or plugged in while running)").changed() {
+                s.hot_connect = if on { Some(HotConnect { members: 1, alias: s.phys_addr }) } else { None };
+                changed = true;
+            }
+            if let Some(h) = s.hot_connect.as_mut() {
+                ui.horizontal(|ui| {
+                    ui.label("Group size (this slave and the next ones)");
+                    changed |= ui.add(egui::DragValue::new(&mut h.members).range(1..=rest.max(1)).clamp_existing_to_range(false)).changed();
+                    ui.label("Station alias");
+                    changed |= ui.add(egui::DragValue::new(&mut h.alias).range(1..=65535).clamp_existing_to_range(false)).changed();
+                });
+                ui.label(
+                    RichText::new("The master recognises the group by reading the station alias (register 0x0012, loaded from EEPROM word 4). Write the same alias into the slave's EEPROM; the EEPROM page uses it when generating the image.")
+                        .small()
+                        .weak(),
+                );
+            }
+            ui.add_space(8.0);
             sub_header(ui, "Watchdog");
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut s.watchdog_enabled, "Set process data watchdog").changed();
@@ -4097,9 +4121,13 @@ impl App {
     fn slave_eeprom(&mut self, ui: &mut egui::Ui, i: usize) {
         let dev = self.project.slaves[i].device.clone();
         let serial = self.project.slaves[i].serial;
+        let alias = self.project.slaves[i].hot_connect.as_ref().map(|h| h.alias).unwrap_or(0);
         ui.horizontal(|ui| {
             if ui.button("⚙ Generate from ESI").clicked() {
-                self.sii_cache = Some((i, sii::build_sii(&dev, serial, 0)));
+                self.sii_cache = Some((i, sii::build_sii(&dev, serial, alias)));
+            }
+            if alias != 0 {
+                ui.label(RichText::new(format!("station alias {} (hot connect)", alias)).weak());
             }
             let have = self.sii_cache.as_ref().map(|c| c.0 == i).unwrap_or(false);
             if ui.add_enabled(have, egui::Button::new("Save as .bin…")).clicked() {

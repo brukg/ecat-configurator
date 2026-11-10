@@ -39,7 +39,11 @@ fn mac_hex(m: &str) -> String {
 }
 
 fn write_init_cmd(x: &mut X, c: &EcInitCmd) {
-    x.open("InitCmd");
+    write_cmd_as(x, "InitCmd", c)
+}
+
+fn write_cmd_as(x: &mut X, tag: &str, c: &EcInitCmd) {
+    x.open(tag);
     for t in c.transitions.iter() {
         x.leaf("Transition", t);
     }
@@ -73,7 +77,7 @@ fn write_init_cmd(x: &mut X, c: &EcInitCmd) {
         x.leaf("Timeout", v.timeout_ms);
         x.close("Validate");
     }
-    x.close("InitCmd");
+    x.close(tag);
 }
 
 fn write_pdo(x: &mut X, tag: &str, pc: &PdoCfg) {
@@ -279,6 +283,32 @@ pub fn export_eni(p: &Project) -> String {
             x.leaf("Port", port_letter(s.parent_port));
             x.leaf("PhysAddr", p.slaves[par].phys_addr);
             x.close("PreviousPort");
+        }
+        if let Some(h) = &s.hot_connect {
+            x.open("HotConnect");
+            x.leaf("GroupMemberCnt", h.members);
+            write_cmd_as(
+                &mut x,
+                "IdentifyCmd",
+                &EcInitCmd {
+                    transitions: vec![],
+                    comment: "read station alias".into(),
+                    requires: "cycle".into(),
+                    cmd: CMD_APRD,
+                    adp: Project::auto_inc(i),
+                    ado: 0x0012,
+                    data: vec![0, 0],
+                    cnt: Some(1),
+                    retries: 3,
+                    validate: Some(Validate {
+                        data: h.alias.to_le_bytes().to_vec(),
+                        mask: None,
+                        timeout_ms: 100,
+                    }),
+                    before_slave: false,
+                },
+            );
+            x.close("HotConnect");
         }
         if p.master.dc_enabled && (s.dc_active() || refc == Some(i)) {
             x.open("DC");
@@ -843,6 +873,17 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                 }
             }
         }
+        if let Some(hc) = child(s, "HotConnect") {
+            let members = num(child(hc, "GroupMemberCnt")).clamp(0, 0xFFFF) as u16;
+            let alias = kids(hc, "IdentifyCmd")
+                .find(|c| num(child(*c, "Ado")) == 0x0012)
+                .and_then(|c| child(c, "Validate"))
+                .map(|v| hex_to_bytes(&txt(child(v, "Data"))))
+                .filter(|d| d.len() >= 2)
+                .map(|d| u16::from_le_bytes([d[0], d[1]]))
+                .unwrap_or(0);
+            sc.hot_connect = Some(HotConnect { members, alias });
+        }
         match child(s, "DC") {
             Some(dc) => {
                 if parse_bool(&txt(child(dc, "ReferenceClock"))) {
@@ -918,7 +959,9 @@ mod tests {
             subnet: "255.255.255.0".into(),
             ..Default::default()
         };
+        p.slaves[k].hot_connect = Some(HotConnect { members: 2, alias: 77 });
         let xml = export_eni(&p);
+        assert!(xml.contains("<HotConnect>"));
         assert!(xml.contains("<SoE>") && xml.contains("<EoE>"));
         roxmltree::Document::parse(&xml).unwrap();
         let (q, _) = import_eni(&xml, &lib).unwrap();
@@ -930,6 +973,7 @@ mod tests {
         assert_eq!(export_eni(&q), xml);
         assert_eq!(q.slaves[k].soe_cmds, p.slaves[k].soe_cmds);
         assert_eq!(q.slaves[k].eoe, p.slaves[k].eoe);
+        assert_eq!(q.slaves[k].hot_connect, p.slaves[k].hot_connect);
         // the modular station keeps its three modules through the round trip
         let m = q.slaves.iter().find(|s| !s.device.slots.is_empty()).unwrap();
         assert_eq!(m.modules.iter().map(|x| x.ident).collect::<Vec<_>>(), vec![0x101, 0x102, 0x103]);

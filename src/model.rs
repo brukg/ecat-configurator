@@ -132,6 +132,18 @@ pub struct SlaveCfg {
     /// EoE IP settings sent at start-up.
     #[serde(default)]
     pub eoe: crate::proto::EoeCfg,
+    /// Set on the first slave of a hot-connect group.
+    #[serde(default)]
+    pub hot_connect: Option<HotConnect>,
+}
+
+/// A hot-connect group: this slave and the next `members - 1` slaves may be missing or
+/// plugged in while running. The master recognises the group by the head's station alias.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HotConnect {
+    pub members: u16,
+    /// Configured station alias (SII word 4, register 0x0012) of the group head.
+    pub alias: u16,
 }
 
 /// One configured slot position: which slot type and which module.
@@ -278,6 +290,21 @@ pub fn open_ports_from_dl_status(dl: u16) -> Vec<u8> {
     (1u8..=3).filter(|p| dl & (1 << (9 + 2 * *p as u16)) != 0).collect()
 }
 
+/// For every slave, the index of the head of the hot-connect group it belongs to.
+pub fn hot_connect_groups(p: &Project) -> Vec<Option<usize>> {
+    let mut v = vec![None; p.slaves.len()];
+    for (i, s) in p.slaves.iter().enumerate() {
+        if let Some(h) = &s.hot_connect {
+            for k in i..(i + h.members.max(1) as usize).min(p.slaves.len()) {
+                if v[k].is_none() {
+                    v[k] = Some(i);
+                }
+            }
+        }
+    }
+    v
+}
+
 pub fn port_letter(p: u8) -> char {
     (b'A' + p.min(3)) as char
 }
@@ -325,6 +352,7 @@ impl SlaveCfg {
             modules,
             soe_cmds: Vec::new(),
             eoe: Default::default(),
+            hot_connect: None,
         }
     }
 
@@ -1366,7 +1394,52 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
                 .into(),
         );
     }
+    let groups = hot_connect_groups(p);
     for (i, s) in p.slaves.iter().enumerate() {
+        if let Some(h) = &s.hot_connect {
+            if h.members == 0 {
+                push(Severity::Error, Some(i), format!("{}: hot-connect group needs at least one member.", s.name));
+            }
+            if i + h.members as usize > p.slaves.len() {
+                push(
+                    Severity::Error,
+                    Some(i),
+                    format!("{}: hot-connect group of {} runs past the end of the network.", s.name, h.members),
+                );
+            }
+            if groups[i] != Some(i) {
+                push(
+                    Severity::Error,
+                    Some(i),
+                    format!("{}: starts a hot-connect group inside another group.", s.name),
+                );
+            }
+            if h.alias == 0 {
+                push(
+                    Severity::Error,
+                    Some(i),
+                    format!("{}: hot-connect group needs a station alias other than 0.", s.name),
+                );
+            } else if let Some(j) = p.slaves.iter().position(|o| o.hot_connect.as_ref().map(|x| x.alias) == Some(h.alias)) {
+                if j < i {
+                    push(
+                        Severity::Error,
+                        Some(i),
+                        format!("{}: station alias {} is also used by the group of {}.", s.name, h.alias, p.slaves[j].name),
+                    );
+                }
+            }
+        }
+        if groups[i].is_some() && p.ref_clock_index() == Some(i) {
+            push(
+                Severity::Warning,
+                Some(i),
+                format!(
+                    "{}: the DC reference clock is in a hot-connect group; when the group is missing there is no reference clock.",
+                    s.name
+                ),
+            );
+        }
         if s.phys_addr == 0 {
             push(Severity::Error, Some(i), format!("{}: station address 0 is not allowed.", s.name));
         }
@@ -1678,6 +1751,25 @@ mod tests {
         lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
         lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
         lib
+    }
+
+    #[test]
+    fn hot_connect_groups_and_checks() {
+        let mut p = demo_project(&demo_lib());
+        p.slaves[4].hot_connect = Some(HotConnect { members: 2, alias: 77 });
+        let g = hot_connect_groups(&p);
+        assert_eq!(g[3], None);
+        assert_eq!(g[4], Some(4));
+        assert_eq!(g[5], Some(4));
+        assert_eq!(g[6], None);
+        let lay = compute_layout(&p);
+        assert!(!validate(&p, &lay).iter().any(|x| x.sev == Severity::Error));
+        p.slaves[5].hot_connect = Some(HotConnect { members: 5, alias: 77 });
+        let lay = compute_layout(&p);
+        let t: Vec<String> = validate(&p, &lay).into_iter().map(|x| x.text).collect();
+        assert!(t.iter().any(|x| x.contains("inside another group")));
+        assert!(t.iter().any(|x| x.contains("runs past the end")));
+        assert!(t.iter().any(|x| x.contains("also used")));
     }
 
     #[test]
