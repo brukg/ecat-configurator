@@ -62,7 +62,21 @@ pub enum Tab {
 }
 
 /// An open configuration (one ENI / project file). Documents are fully independent.
+/// Undo/redo of one document. Edits less than 0.8 s apart (typing, dragging) form one step.
+#[derive(Default)]
+struct History {
+    undo: Vec<Project>,
+    redo: Vec<Project>,
+    /// State after the last recorded change.
+    base: Option<Project>,
+    last_change: f64,
+}
+
+const UNDO_LIMIT: usize = 100;
+
 struct Doc {
+    hist: History,
+    changed: bool,
     name: String,
     project: Project,
     path: Option<PathBuf>,
@@ -289,6 +303,15 @@ pub struct App {
     /// Name of the active document; the active document's data lives in the fields
     /// `project`, `project_path`, `dirty`, `eni_text`, `sel`, `last_sel`.
     doc_name: String,
+    /// Undo history and "changed this frame" flag of the active document.
+    hist: History,
+    changed: bool,
+    /// Copied slaves (also put on the system clipboard as JSON).
+    clip: Vec<SlaveCfg>,
+    /// Time of the current frame (seconds).
+    now: f64,
+    /// A text field has focus or a value is being dragged (edits then merge into one undo step).
+    continuous: bool,
     active_doc: u64,
     /// The other open documents.
     docs: std::collections::HashMap<u64, Doc>,
@@ -344,6 +367,11 @@ impl App {
             project: Project::default(),
             project_path: None,
             doc_name: "Demo network".into(),
+            hist: History::default(),
+            changed: false,
+            clip: Vec::new(),
+            now: 0.0,
+            continuous: false,
             active_doc: 1,
             docs: std::collections::HashMap::new(),
             doc_order: vec![1],
@@ -590,8 +618,136 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ undo / redo / clipboard
+    /// Record the changes made this frame as one undo step (or merge them into the last one).
+    fn commit_history(&mut self) {
+        if !self.changed {
+            if self.hist.base.is_none() {
+                self.hist.base = Some(self.project.clone());
+            }
+            return;
+        }
+        self.changed = false;
+        let base = self.hist.base.take().unwrap_or_else(|| self.project.clone());
+        // typing in a field or dragging a value merges into one step; every other action is its own step
+        let merge = self.continuous && self.now - self.hist.last_change <= 0.8 && !self.hist.undo.is_empty();
+        if !merge {
+            self.hist.undo.push(base);
+            if self.hist.undo.len() > UNDO_LIMIT {
+                self.hist.undo.remove(0);
+            }
+        }
+        self.hist.redo.clear();
+        self.hist.base = Some(self.project.clone());
+        self.hist.last_change = self.now;
+    }
+
+    fn undo(&mut self) {
+        self.commit_history();
+        if let Some(prev) = self.hist.undo.pop() {
+            let cur = std::mem::replace(&mut self.project, prev);
+            self.hist.redo.push(cur);
+            self.hist.base = Some(self.project.clone());
+            self.hist.last_change = f64::MIN;
+            self.dirty = true;
+            self.resync_selection();
+            self.info(&format!("Undo ({} more step(s) available)", self.hist.undo.len()));
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(next) = self.hist.redo.pop() {
+            let cur = std::mem::replace(&mut self.project, next);
+            self.hist.undo.push(cur);
+            self.hist.base = Some(self.project.clone());
+            self.hist.last_change = f64::MIN;
+            self.dirty = true;
+            self.resync_selection();
+            self.info("Redo");
+        }
+    }
+
+    /// After the project was replaced (undo/redo), point the tree at what the active editor shows.
+    fn resync_selection(&mut self) {
+        match self.editors.get(&self.active_editor).and_then(|e| e.target).and_then(|t| self.target_to_sel(t)) {
+            Some(sel) => {
+                self.sel = sel;
+                self.last_sel = sel;
+            }
+            None => {
+                // the item the editor showed is gone: show the tree selection there instead
+                self.fix_selection();
+                let t = self.sel_to_target(self.sel);
+                if let Some(e) = self.editors.get_mut(&self.active_editor) {
+                    if e.target.is_some() {
+                        e.target = t;
+                        e.sel_pdo = None;
+                    }
+                }
+                self.last_sel = self.sel;
+            }
+        }
+    }
+
+    fn copy_selected(&mut self, ctx: &egui::Context) -> bool {
+        if let Sel::Slave(i) = self.sel {
+            if let Some(s) = self.project.slaves.get(i) {
+                self.clip = vec![s.clone()];
+                if let Ok(j) = serde_json::to_string(&serde_json::json!({ "ecat_configurator_slaves": self.clip })) {
+                    ctx.copy_text(j);
+                }
+                let name = s.name.clone();
+                self.info(&format!("Copied {}", name));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Paste copied slaves after the selected one (from the system clipboard when it holds slaves).
+    fn paste(&mut self, text: Option<&str>) {
+        let from_text: Option<Vec<SlaveCfg>> = text
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+            .and_then(|v| v.get("ecat_configurator_slaves").cloned())
+            .and_then(|v| serde_json::from_value(v).ok());
+        let list = from_text.unwrap_or_else(|| self.clip.clone());
+        if list.is_empty() {
+            return;
+        }
+        let mut at = match self.sel {
+            Sel::Slave(i) => Some(i),
+            _ => self.project.slaves.len().checked_sub(1),
+        };
+        let mut first = None;
+        for s in list.into_iter() {
+            let idx = self.project.paste_slave(s, at);
+            first.get_or_insert(idx);
+            at = Some(idx);
+        }
+        if let Some(i) = at {
+            self.select(Sel::Slave(i));
+        }
+        self.dirty = true;
+        self.changed = true;
+        self.info(&format!("Pasted at position {}", first.unwrap_or(0)));
+    }
+
+    fn duplicate_selected(&mut self) {
+        if let Sel::Slave(i) = self.sel {
+            if let Some(s) = self.project.slaves.get(i).cloned() {
+                let idx = self.project.paste_slave(s, Some(i));
+                self.select(Sel::Slave(idx));
+                self.dirty = true;
+                self.changed = true;
+                self.info(&format!("Duplicated as position {}", idx));
+            }
+        }
+    }
+
     // ------------------------------------------------------------ documents
     fn swap_doc(&mut self, d: &mut Doc) {
+        std::mem::swap(&mut self.hist, &mut d.hist);
+        std::mem::swap(&mut self.changed, &mut d.changed);
         std::mem::swap(&mut self.project, &mut d.project);
         std::mem::swap(&mut self.project_path, &mut d.path);
         std::mem::swap(&mut self.dirty, &mut d.dirty);
@@ -610,7 +766,11 @@ impl App {
         self.swap_doc(&mut d);
         let saved = self.active_doc;
         self.active_doc = id;
+        if self.hist.base.is_none() {
+            self.hist.base = Some(self.project.clone());
+        }
         let r = f(self);
+        self.commit_history();
         self.active_doc = saved;
         self.swap_doc(&mut d);
         self.docs.insert(id, d);
@@ -659,6 +819,8 @@ impl App {
     fn add_document(&mut self, name: String, project: Project, path: Option<PathBuf>, dirty: bool) -> u64 {
         let id = next_doc_id();
         let mut d = Doc {
+            hist: History::default(),
+            changed: false,
             name,
             project,
             path,
@@ -794,6 +956,8 @@ impl App {
                 None => {
                     let nid = next_doc_id();
                     self.project = Project::default();
+                    self.hist = History::default();
+                    self.changed = false;
                     self.project_path = None;
                     self.dirty = false;
                     self.eni_text.clear();
@@ -868,6 +1032,7 @@ impl App {
         self.sel = Sel::Slave(idx);
         self.sel_pdo = None;
         self.dirty = true;
+        self.changed = true;
         let name = self.project.slaves[idx].name.clone();
         self.info(&format!("Added {} at position {}", name, idx));
     }
@@ -882,6 +1047,7 @@ impl App {
                 Sel::Slave(i.min(self.project.slaves.len() - 1))
             };
             self.dirty = true;
+            self.changed = true;
             self.info(&format!("Removed {}", name));
         }
     }
@@ -892,10 +1058,12 @@ impl App {
                 self.project.move_down(i - 1);
                 self.sel = Sel::Slave(i - 1);
                 self.dirty = true;
+                self.changed = true;
             } else if !up && i + 1 < self.project.slaves.len() {
                 self.project.move_down(i);
                 self.sel = Sel::Slave(i + 1);
                 self.dirty = true;
+                self.changed = true;
             }
         }
     }
@@ -1057,6 +1225,57 @@ impl App {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.menu_button("Edit", |ui| {
+                let is_slave = matches!(self.sel, Sel::Slave(_));
+                if ui
+                    .add_enabled(
+                        !self.hist.undo.is_empty(),
+                        egui::Button::new(format!("Undo  ({})        Ctrl+Z", self.hist.undo.len())),
+                    )
+                    .clicked()
+                {
+                    self.undo();
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(
+                        !self.hist.redo.is_empty(),
+                        egui::Button::new(format!("Redo  ({})        Ctrl+Y", self.hist.redo.len())),
+                    )
+                    .clicked()
+                {
+                    self.redo();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.add_enabled(is_slave, egui::Button::new("Cut slave                 Ctrl+X")).clicked() {
+                    if self.copy_selected(ui.ctx()) {
+                        self.remove_selected();
+                    }
+                    ui.close_menu();
+                }
+                if ui.add_enabled(is_slave, egui::Button::new("Copy slave               Ctrl+C")).clicked() {
+                    self.copy_selected(ui.ctx());
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(!self.clip.is_empty(), egui::Button::new("Paste slave              Ctrl+V"))
+                    .clicked()
+                {
+                    self.paste(None);
+                    ui.close_menu();
+                }
+                if ui.add_enabled(is_slave, egui::Button::new("Duplicate slave        Ctrl+D")).clicked() {
+                    self.duplicate_selected();
+                    ui.close_menu();
+                }
+                ui.separator();
+                ui.label(
+                    RichText::new("Copied slaves can be pasted into another document,\nor into another running copy of the program.")
+                        .small()
+                        .weak(),
+                );
+            });
             ui.menu_button("Device Catalog", |ui| {
                 if ui.button("Add ESI files…").clicked() {
                     ui.close_menu();
@@ -1104,12 +1323,14 @@ impl App {
                         s.phys_addr = 1001 + i as u16;
                     }
                     self.dirty = true;
+                    self.changed = true;
                     self.info("Station addresses renumbered");
                 }
                 if ui.button("Make topology linear").clicked() {
                     ui.close_menu();
                     self.project.relinearize();
                     self.dirty = true;
+                    self.changed = true;
                 }
                 ui.separator();
                 if ui.button("Scan bus…").clicked() {
@@ -1193,6 +1414,20 @@ impl App {
             }
             if ui.button("💾 Save").clicked() {
                 self.save_project(false);
+            }
+            if ui
+                .add_enabled(!self.hist.undo.is_empty(), egui::Button::new("⟲"))
+                .on_hover_text("Undo (Ctrl+Z)")
+                .clicked()
+            {
+                self.undo();
+            }
+            if ui
+                .add_enabled(!self.hist.redo.is_empty(), egui::Button::new("⟳"))
+                .on_hover_text("Redo (Ctrl+Y)")
+                .clicked()
+            {
+                self.redo();
             }
             ui.separator();
             if ui
@@ -2255,6 +2490,7 @@ impl App {
         });
         if changed {
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -2321,6 +2557,7 @@ impl App {
         });
         if changed {
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -2572,6 +2809,7 @@ impl App {
                     s.serial = x.serial;
                 }
                 self.dirty = true;
+                self.changed = true;
                 self.info("Serial numbers taken from scanned slaves");
             }
         });
@@ -2884,6 +3122,7 @@ impl App {
             self.project.slaves[i].set_modules(mods);
             self.sel_pdo = None;
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -2991,6 +3230,7 @@ impl App {
         });
         if changed {
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -3295,6 +3535,7 @@ impl App {
         });
         if changed {
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -3573,6 +3814,7 @@ impl App {
         });
         if changed {
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -3660,6 +3902,7 @@ impl App {
         }
         if changed {
             self.dirty = true;
+            self.changed = true;
         }
     }
 
@@ -4041,6 +4284,44 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         // keyboard shortcuts
+        self.now = ctx.input(|i| i.time);
+        self.continuous = ctx.wants_keyboard_input() || ctx.input(|i| i.pointer.is_decidedly_dragging());
+        if self.hist.base.is_none() {
+            self.hist.base = Some(self.project.clone());
+        }
+        if !ctx.wants_keyboard_input() {
+            let (u, r, d, ev) = ctx.input(|i| {
+                (
+                    i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
+                    i.modifiers.command && (i.key_pressed(egui::Key::Y) || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
+                    i.modifiers.command && i.key_pressed(egui::Key::D),
+                    i.events.clone(),
+                )
+            });
+            if u {
+                self.undo();
+            }
+            if r {
+                self.redo();
+            }
+            if d {
+                self.duplicate_selected();
+            }
+            for e in ev {
+                match e {
+                    egui::Event::Copy => {
+                        self.copy_selected(ctx);
+                    }
+                    egui::Event::Cut => {
+                        if self.copy_selected(ctx) {
+                            self.remove_selected();
+                        }
+                    }
+                    egui::Event::Paste(t) => self.paste(Some(&t)),
+                    _ => {}
+                }
+            }
+        }
         let (save, open, export, del) = ctx.input(|i| {
             (
                 i.modifiers.command && i.key_pressed(egui::Key::S),
@@ -4110,6 +4391,8 @@ impl App {
         self.fix_selection();
         self.show_windows(ctx);
         self.apply_pending();
+        self.continuous = ctx.wants_keyboard_input() || ctx.input(|i| i.pointer.is_decidedly_dragging());
+        self.commit_history();
 
         // files dropped onto the window
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());

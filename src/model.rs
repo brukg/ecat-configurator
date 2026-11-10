@@ -383,9 +383,15 @@ impl Project {
 
     pub fn add_device(&mut self, dev: &EsiDevice, at: Option<usize>) -> usize {
         let phys = self.next_phys_addr();
-        let mut s = SlaveCfg::from_device(dev, phys);
+        let s = SlaveCfg::from_device(dev, phys);
+        self.insert_slave(s, at)
+    }
+
+    /// Insert a configured slave after position `at` (None = at the end), keeping the chain linked.
+    pub fn insert_slave(&mut self, mut s: SlaveCfg, at: Option<usize>) -> usize {
         let idx = at.map(|i| (i + 1).min(self.slaves.len())).unwrap_or(self.slaves.len());
         s.parent = if idx == 0 { None } else { Some(idx - 1) };
+        s.parent_port = 1;
         // fix up parent indices of slaves after the insertion point
         for sl in self.slaves.iter_mut() {
             if let Some(p) = sl.parent {
@@ -400,8 +406,27 @@ impl Project {
                 self.slaves[idx].parent = Some(idx);
             }
         }
+        if let Some(r) = self.master.ref_clock {
+            if r >= idx {
+                self.master.ref_clock = Some(r + 1);
+            }
+        }
         self.slaves.insert(idx, s);
         idx
+    }
+
+    /// Paste a copy of a slave: it gets a new identity and, if needed, a free station address.
+    pub fn paste_slave(&mut self, mut s: SlaveCfg, at: Option<usize>) -> usize {
+        s.uid = next_uid();
+        if s.phys_addr == 0 || self.slaves.iter().any(|o| o.phys_addr == s.phys_addr) {
+            let old = s.phys_addr;
+            s.phys_addr = self.next_phys_addr();
+            let prefix = format!("Slave_{}", old);
+            if let Some(rest) = s.name.strip_prefix(&prefix) {
+                s.name = format!("Slave_{}{}", s.phys_addr, rest);
+            }
+        }
+        self.insert_slave(s, at)
     }
 
     pub fn remove(&mut self, idx: usize) {
@@ -1476,6 +1501,27 @@ mod tests {
         lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
         lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
         lib
+    }
+
+    #[test]
+    fn paste_keeps_chain_and_unique_identity() {
+        let mut p = demo_project(&demo_lib());
+        p.master.ref_clock = Some(3);
+        let n = p.slaves.len();
+        let copy = p.slaves[1].clone();
+        let at = p.paste_slave(copy.clone(), Some(1));
+        assert_eq!(at, 2);
+        assert_eq!(p.slaves.len(), n + 1);
+        assert_ne!(p.slaves[2].uid, copy.uid);
+        assert_ne!(p.slaves[2].phys_addr, copy.phys_addr);
+        assert!(p.slaves[2].name.starts_with(&format!("Slave_{}", p.slaves[2].phys_addr)));
+        // linear chain: every slave hangs on the one before it
+        for (i, s) in p.slaves.iter().enumerate() {
+            assert_eq!(s.parent, if i == 0 { None } else { Some(i - 1) });
+        }
+        assert_eq!(p.master.ref_clock, Some(4));
+        let lay = compute_layout(&p);
+        assert!(!validate(&p, &lay).iter().any(|x| x.sev == Severity::Error));
     }
 
     #[test]

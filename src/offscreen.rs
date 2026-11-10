@@ -85,43 +85,87 @@ pub fn screenshot(opts: StartOptions, path: &Path, w: u32, h: u32, frames: u32) 
     let mut prims = Vec::new();
     let mut ppp = 1.0;
     let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(w as f32, h as f32));
-    // test hook: ECAT_TEST_CLICKS="frame:x:y,frame:x:y" replays mouse clicks (for automated checks)
-    let clicks: Vec<(u32, f32, f32)> = std::env::var("ECAT_TEST_CLICKS")
+    // test hook: ECAT_TEST_CLICKS="frame:x:y,frame:key:Z:ctrl,frame:copy,frame:paste" replays input
+    enum Act {
+        Click(f32, f32),
+        Key(egui::Key, egui::Modifiers),
+        Copy,
+        Paste,
+    }
+    let acts: Vec<(u32, Act)> = std::env::var("ECAT_TEST_CLICKS")
         .unwrap_or_default()
         .split(',')
         .filter_map(|c| {
-            let v: Vec<&str> = c.split(':').collect();
-            if v.len() == 3 {
-                Some((v[0].trim().parse().ok()?, v[1].trim().parse().ok()?, v[2].trim().parse().ok()?))
-            } else {
-                None
+            let v: Vec<&str> = c.split(':').map(|x| x.trim()).collect();
+            let f: u32 = v.first()?.parse().ok()?;
+            match v.get(1).copied() {
+                Some("key") => {
+                    let key = egui::Key::from_name(v.get(2)?)?;
+                    let mut m = egui::Modifiers::default();
+                    for flag in v.iter().skip(3) {
+                        match *flag {
+                            "ctrl" => {
+                                m.ctrl = true;
+                                m.command = true;
+                            }
+                            "shift" => m.shift = true,
+                            _ => {}
+                        }
+                    }
+                    Some((f, Act::Key(key, m)))
+                }
+                Some("copy") => Some((f, Act::Copy)),
+                Some("paste") => Some((f, Act::Paste)),
+                Some(x) => Some((f, Act::Click(x.parse().ok()?, v.get(2)?.parse().ok()?))),
+                None => None,
             }
         })
         .collect();
-    let frames = frames.max(clicks.iter().map(|c| c.0 + 30).max().unwrap_or(0));
+    let frames = frames.max(acts.iter().map(|c| c.0 + 30).max().unwrap_or(0));
     for f in 0..frames.max(2) {
         let mut events = Vec::new();
-        for (cf, x, y) in clicks.iter() {
-            let pos = Pos2::new(*x, *y);
-            let press = |pressed| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            };
-            if f + 1 == *cf {
-                events.push(egui::Event::PointerMoved(pos));
-            } else if f == *cf {
-                events.push(egui::Event::PointerMoved(pos));
-                events.push(press(true));
-            } else if f == cf + 1 {
-                events.push(press(false));
+        let mut modifiers = egui::Modifiers::default();
+        for (cf, act) in acts.iter() {
+            match act {
+                Act::Click(x, y) => {
+                    let pos = Pos2::new(*x, *y);
+                    let press = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    if f + 1 == *cf {
+                        events.push(egui::Event::PointerMoved(pos));
+                    } else if f == *cf {
+                        events.push(egui::Event::PointerMoved(pos));
+                        events.push(press(true));
+                    } else if f == cf + 1 {
+                        events.push(press(false));
+                    }
+                }
+                Act::Key(key, m) => {
+                    if f == *cf || f == cf + 1 {
+                        modifiers = *m;
+                        events.push(egui::Event::Key {
+                            key: *key,
+                            physical_key: None,
+                            pressed: f == *cf,
+                            repeat: false,
+                            modifiers: *m,
+                        });
+                    }
+                }
+                Act::Copy if f == *cf => events.push(egui::Event::Copy),
+                Act::Paste if f == *cf => events.push(egui::Event::Paste(String::new())),
+                _ => {}
             }
         }
         let input = egui::RawInput {
             screen_rect: Some(screen),
             time: Some(f as f64 / 60.0),
             events,
+            modifiers,
             ..Default::default()
         };
         let out = ctx.run(input, |ctx| app.ui(ctx));
