@@ -122,6 +122,104 @@ pub struct SlaveCfg {
     pub watchdog_enabled: bool,
     pub watchdog_ms: u32,
     pub generate_pdo_cmds: bool,
+    /// Modules plugged into the slots of a modular device, in slot order.
+    #[serde(default)]
+    pub modules: Vec<ModuleInst>,
+}
+
+/// One configured slot position: which slot type and which module.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ModuleInst {
+    pub slot: usize,
+    pub ident: u32,
+}
+
+/// A module PDO moved to its slot position (PDO and object indices shifted).
+fn slot_pdo(p: &Pdo, pos: u32, sd: &SlotDef, md: &ModuleDef) -> Pdo {
+    let pinc = (sd.pdo_inc as u32 * pos) as u16;
+    let iinc = (sd.index_inc as u32 * pos) as u16;
+    let mut q = p.clone();
+    q.index = p.index.wrapping_add(pinc);
+    q.excludes = p.excludes.iter().map(|x| x.wrapping_add(pinc)).collect();
+    for e in q.entries.iter_mut() {
+        if !e.is_gap() && slot_shifts_index(e.index) {
+            e.index = e.index.wrapping_add(iinc);
+        }
+    }
+    q.name = format!("Slot {} {}: {}", pos + 1, md.type_name, p.name);
+    q
+}
+
+/// Default slot configuration of a device: the minimum number of each slot with its default module.
+pub fn default_modules(dev: &EsiDevice) -> Vec<ModuleInst> {
+    let mut v = Vec::new();
+    for (si, sd) in dev.slots.iter().enumerate() {
+        let ident = sd
+            .default_ident
+            .or_else(|| sd.idents.first().copied())
+            .or_else(|| dev.modules.iter().find(|m| sd.accepts(m)).map(|m| m.ident));
+        if let Some(id) = ident {
+            for _ in 0..sd.min {
+                v.push(ModuleInst { slot: si, ident: id });
+            }
+        }
+    }
+    v
+}
+
+/// Spread a list of module idents (e.g. read from an ENI's 0xF030 list) over the slot types.
+pub fn modules_from_idents(dev: &EsiDevice, idents: &[u32]) -> Vec<ModuleInst> {
+    let mut count = vec![0u32; dev.slots.len()];
+    let mut cur = 0usize;
+    let mut v = Vec::new();
+    let fits = |si: usize, id: u32| {
+        let sd = &dev.slots[si];
+        sd.idents.contains(&id) || dev.modules.iter().any(|m| m.ident == id && sd.accepts(m))
+    };
+    for id in idents.iter().copied() {
+        let pick = (cur..dev.slots.len()).chain(0..cur).find(|&si| fits(si, id) && count[si] < dev.slots[si].max);
+        if let Some(si) = pick {
+            count[si] += 1;
+            cur = si;
+            v.push(ModuleInst { slot: si, ident: id });
+        }
+    }
+    v
+}
+
+/// PDO configuration of a device with the given modules, using the ESI default assignment rules.
+pub fn build_pdo_cfgs(dev: &EsiDevice, modules: &[ModuleInst]) -> Vec<PdoCfg> {
+    let mut rx = dev.rx_pdos.clone();
+    let mut tx = dev.tx_pdos.clone();
+    for (pos, mi) in modules.iter().enumerate() {
+        let (sd, md) = match (dev.slots.get(mi.slot), dev.modules.iter().find(|m| m.ident == mi.ident)) {
+            (Some(sd), Some(md)) => (sd, md),
+            _ => continue,
+        };
+        rx.extend(md.rx_pdos.iter().map(|p| slot_pdo(p, pos as u32, sd, md)));
+        tx.extend(md.tx_pdos.iter().map(|p| slot_pdo(p, pos as u32, sd, md)));
+    }
+    let mut pdos = Vec::new();
+    let first_sm = |kind: SmKind| dev.sms.iter().position(|s| s.kind == kind).unwrap_or(0) as u8;
+    for (list, is_tx, kind) in [(&rx, false, SmKind::Outputs), (&tx, true, SmKind::Inputs)] {
+        let any_sm = list.iter().any(|p| p.sm.is_some());
+        let mut chosen: Vec<u16> = Vec::new();
+        for p in list.iter() {
+            let wanted = if any_sm { p.sm.is_some() || p.mandatory } else { true };
+            let conflict = chosen.iter().any(|c| p.excludes.contains(c));
+            let assigned = wanted && (!conflict || p.mandatory);
+            if assigned {
+                chosen.push(p.index);
+            }
+            pdos.push(PdoCfg {
+                pdo: p.clone(),
+                is_tx,
+                assigned,
+                sm: p.sm.unwrap_or_else(|| first_sm(kind)),
+            });
+        }
+    }
+    pdos
 }
 
 static UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -136,26 +234,8 @@ pub fn port_letter(p: u8) -> char {
 
 impl SlaveCfg {
     pub fn from_device(dev: &EsiDevice, phys: u16) -> SlaveCfg {
-        let mut pdos = Vec::new();
-        let first_sm = |kind: SmKind| dev.sms.iter().position(|s| s.kind == kind).unwrap_or(0) as u8;
-        for (list, is_tx, kind) in [(&dev.rx_pdos, false, SmKind::Outputs), (&dev.tx_pdos, true, SmKind::Inputs)] {
-            let any_sm = list.iter().any(|p| p.sm.is_some());
-            let mut chosen: Vec<u16> = Vec::new();
-            for p in list.iter() {
-                let wanted = if any_sm { p.sm.is_some() || p.mandatory } else { true };
-                let conflict = chosen.iter().any(|c| p.excludes.contains(c));
-                let assigned = wanted && (!conflict || p.mandatory);
-                if assigned {
-                    chosen.push(p.index);
-                }
-                pdos.push(PdoCfg {
-                    pdo: p.clone(),
-                    is_tx,
-                    assigned,
-                    sm: p.sm.unwrap_or_else(|| first_sm(kind)),
-                });
-            }
-        }
+        let modules = default_modules(dev);
+        let pdos = build_pdo_cfgs(dev, &modules);
         let mbx_size = |kind: SmKind| {
             dev.sms
                 .iter()
@@ -192,7 +272,32 @@ impl SlaveCfg {
             watchdog_enabled: false,
             watchdog_ms: 100,
             generate_pdo_cmds: true,
+            modules,
         }
+    }
+
+    /// Change the plugged modules; keeps the assignment of PDOs that stay the same.
+    pub fn set_modules(&mut self, modules: Vec<ModuleInst>) {
+        let mut new = build_pdo_cfgs(&self.device, &modules);
+        for pc in new.iter_mut() {
+            if let Some(old) = self
+                .pdos
+                .iter()
+                .find(|o| o.is_tx == pc.is_tx && o.pdo.index == pc.pdo.index && o.pdo.name == pc.pdo.name)
+            {
+                pc.assigned = old.assigned || pc.pdo.mandatory;
+                pc.sm = old.sm;
+                if !pc.pdo.fixed {
+                    pc.pdo.entries = old.pdo.entries.clone();
+                }
+            }
+        }
+        self.modules = modules;
+        self.pdos = new;
+    }
+
+    pub fn module_def(&self, ident: u32) -> Option<&ModuleDef> {
+        self.device.modules.iter().find(|m| m.ident == ident)
     }
 
     pub fn has_mailbox(&self) -> bool {
@@ -791,6 +896,32 @@ pub fn slave_coe_cmds(p: &Project, i: usize) -> Vec<CoeInitCmd> {
         Some(c) => c,
         None => return v,
     };
+    let gen = |idx: u16, sub: u8, data: Vec<u8>, comment: String| CoeInitCmd {
+        transition: "PS".into(),
+        index: idx,
+        subindex: sub,
+        data,
+        comment,
+        complete_access: false,
+        fixed: true,
+        enabled: true,
+        generated: true,
+        timeout_ms: p.master.timeout_mailbox_ms,
+    };
+    if !s.modules.is_empty() {
+        // configured module ident list (ETG.5001 modular device profile)
+        v.push(gen(0xF030, 0, vec![0], "clear configured module list (0xF030)".into()));
+        for (k, m) in s.modules.iter().enumerate() {
+            let name = s.module_def(m.ident).map(|d| d.type_name.clone()).unwrap_or_default();
+            v.push(gen(
+                0xF030,
+                (k + 1) as u8,
+                m.ident.to_le_bytes().to_vec(),
+                format!("slot {} module ident ({})", k + 1, name),
+            ));
+        }
+        v.push(gen(0xF030, 0, vec![s.modules.len() as u8], "configured module count (0xF030)".into()));
+    }
     if s.generate_pdo_cmds {
         let mk = |idx: u16, sub: u8, data: Vec<u8>, comment: String, ca: bool| CoeInitCmd {
             transition: "PS".into(),
@@ -853,6 +984,21 @@ pub fn slave_coe_cmds(p: &Project, i: usize) -> Vec<CoeInitCmd> {
                     }
                     v.push(mk(obj, 0, vec![list.len() as u8], format!("download pdo {:#06x} count", obj), false));
                 }
+            }
+        }
+    }
+    // start-up parameters that come with the plugged modules
+    for (pos, m) in s.modules.iter().enumerate() {
+        if let (Some(md), Some(sd)) = (s.module_def(m.ident), s.device.slots.get(m.slot)) {
+            for c in md.init_cmds.iter() {
+                let mut c = c.clone();
+                if slot_shifts_index(c.index) {
+                    c.index = c.index.wrapping_add((sd.index_inc as u32 * pos as u32) as u16);
+                }
+                c.comment = format!("slot {} {}: {}", pos + 1, md.type_name, c.comment);
+                c.generated = true;
+                c.timeout_ms = p.master.timeout_mailbox_ms;
+                v.push(c);
             }
         }
     }
@@ -955,6 +1101,49 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
                 }
             }
         }
+        if !s.device.slots.is_empty() {
+            for (si, sd) in s.device.slots.iter().enumerate() {
+                let n = s.modules.iter().filter(|m| m.slot == si).count() as u32;
+                if n < sd.min {
+                    push(
+                        Severity::Error,
+                        Some(i),
+                        format!("{}: slot \"{}\" needs at least {} module(s), {} configured.", s.name, sd.name, sd.min, n),
+                    );
+                }
+                if n > sd.max {
+                    push(
+                        Severity::Error,
+                        Some(i),
+                        format!("{}: slot \"{}\" allows at most {} module(s), {} configured.", s.name, sd.name, sd.max, n),
+                    );
+                }
+            }
+            for (k, m) in s.modules.iter().enumerate() {
+                match (s.module_def(m.ident), s.device.slots.get(m.slot)) {
+                    (Some(md), Some(sd)) if !sd.accepts(md) => {
+                        push(
+                            Severity::Error,
+                            Some(i),
+                            format!("{}: module {} does not fit slot {}.", s.name, md.type_name, k + 1),
+                        );
+                    }
+                    (None, _) => push(
+                        Severity::Error,
+                        Some(i),
+                        format!("{}: slot {} has unknown module ident {:#010x}.", s.name, k + 1, m.ident),
+                    ),
+                    _ => {}
+                }
+            }
+            if !s.modules.is_empty() && s.device.coe().is_none() {
+                push(
+                    Severity::Warning,
+                    Some(i),
+                    format!("{}: modules are configured but the device has no CoE to download the module list.", s.name),
+                );
+            }
+        }
         let has_assign = s.device.coe().map(|c| c.pdo_assign).unwrap_or(false);
         if !has_assign {
             let default = SlaveCfg::from_device(&s.device, 0);
@@ -1040,6 +1229,7 @@ pub fn demo_project(lib: &EsiLibrary) -> Project {
         (0x00040004, 0),
         (0x00100200, 0),
         (0x00100200, 0),
+        (0x00200001, 0),
     ] {
         if let Some(d) = lib.devices.iter().find(|d| d.product_code == prod) {
             let d = d.clone();
@@ -1047,5 +1237,40 @@ pub fn demo_project(lib: &EsiLibrary) -> Project {
         }
     }
     p.relinearize();
+    if let Some(s) = p.slaves.iter_mut().find(|s| !s.device.slots.is_empty()) {
+        s.set_modules(vec![
+            ModuleInst { slot: 0, ident: 0x101 },
+            ModuleInst { slot: 0, ident: 0x102 },
+            ModuleInst { slot: 0, ident: 0x103 },
+        ]);
+    }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn modules_shift_pdos_and_objects() {
+        let d = parse_esi(SAMPLE_MODULAR, "m").unwrap().remove(0);
+        let mut s = SlaveCfg::from_device(&d, 1001);
+        assert!(s.modules.is_empty());
+        s.set_modules(vec![ModuleInst { slot: 0, ident: 0x101 }, ModuleInst { slot: 0, ident: 0x103 }]);
+        let tx: Vec<&PdoCfg> = s.pdos.iter().filter(|p| p.is_tx).collect();
+        // base status PDO + slot 1 (DI8 at 0x1A01) + slot 2 (AI2 at 0x1A02, objects +0x10)
+        assert_eq!(tx.len(), 3);
+        assert_eq!(tx[1].pdo.index, 0x1A01);
+        assert_eq!(tx[2].pdo.index, 0x1A02);
+        assert_eq!(tx[2].pdo.entries[0].index, 0x6010);
+        assert!(tx.iter().all(|p| p.assigned));
+        let mut p = Project::default();
+        p.slaves.push(s);
+        let c = slave_coe_cmds(&p, 0);
+        let f030: Vec<&CoeInitCmd> = c.iter().filter(|c| c.index == 0xF030).collect();
+        assert_eq!(f030.len(), 4);
+        assert_eq!(f030[2].data, 0x103u32.to_le_bytes().to_vec());
+        // module start-up command moved to slot 2's object range
+        assert!(c.iter().any(|c| c.index == 0x8010 && c.subindex == 1));
+        assert_eq!(modules_from_idents(&d, &[0x101, 0x103]), p.slaves[0].modules);
+    }
 }

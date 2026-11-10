@@ -37,6 +37,7 @@ pub enum MasterTab {
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SlaveTab {
     General,
+    Modules,
     ProcessData,
     Mailbox,
     Dc,
@@ -229,6 +230,7 @@ fn master_page_name(p: MasterTab) -> &'static str {
 fn slave_page_name(p: SlaveTab) -> &'static str {
     match p {
         SlaveTab::General => "General",
+        SlaveTab::Modules => "Modules",
         SlaveTab::ProcessData => "Process Data",
         SlaveTab::Mailbox => "Mailbox",
         SlaveTab::Dc => "DC",
@@ -386,7 +388,11 @@ impl App {
         }
         app.active_editor = insts.first().copied().unwrap_or(1);
         app.info("EtherCAT configurator started");
-        for (name, xml) in [("built-in: example_io.xml", SAMPLE_IO), ("built-in: example_drive.xml", SAMPLE_DRIVE)] {
+        for (name, xml) in [
+            ("built-in: example_io.xml", SAMPLE_IO),
+            ("built-in: example_drive.xml", SAMPLE_DRIVE),
+            ("built-in: example_modular.xml", SAMPLE_MODULAR),
+        ] {
             match app.lib.add_xml(xml, name) {
                 Ok(n) => app.info(&format!("Loaded {} device(s) from {}", n, name)),
                 Err(e) => app.err(&format!("{}: {}", name, e)),
@@ -426,6 +432,12 @@ impl App {
                 }
                 "mailbox" => {
                     app.slave_tab = SlaveTab::Mailbox;
+                }
+                "modules" => {
+                    if let Some(k) = app.project.slaves.iter().position(|s| !s.device.slots.is_empty()) {
+                        app.sel = Sel::Slave(k);
+                    }
+                    app.slave_tab = SlaveTab::Modules;
                 }
                 "init" => {
                     app.slave_tab = SlaveTab::InitCmds;
@@ -936,6 +948,8 @@ impl App {
                         eeprom: None,
                         profile_no: None,
                         source_file: "scan".into(),
+                        slots: vec![],
+                        modules: vec![],
                     }
                 }
             };
@@ -1038,6 +1052,7 @@ impl App {
                     self.lib = EsiLibrary::default();
                     let _ = self.lib.add_xml(SAMPLE_IO, "built-in: example_io.xml");
                     let _ = self.lib.add_xml(SAMPLE_DRIVE, "built-in: example_drive.xml");
+                    let _ = self.lib.add_xml(SAMPLE_MODULAR, "built-in: example_modular.xml");
                     for p in self.settings.esi_paths.clone() {
                         self.load_esi_path(&PathBuf::from(p), false);
                     }
@@ -2000,6 +2015,26 @@ impl App {
                         d.eeprom.as_ref().map(|e| format!("{} bytes", e.byte_size)).unwrap_or_else(|| "–".into()),
                     ),
                     ("Profile", d.profile_no.map(|p| p.to_string()).unwrap_or_else(|| "–".into())),
+                    (
+                        "Slots",
+                        if d.slots.is_empty() {
+                            "none".into()
+                        } else {
+                            d.slots
+                                .iter()
+                                .map(|s| format!("{} ({}–{})", s.name, s.min, s.max))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
+                    ),
+                    (
+                        "Modules",
+                        if d.modules.is_empty() {
+                            "–".into()
+                        } else {
+                            d.modules.iter().map(|m| m.type_name.clone()).collect::<Vec<_>>().join(", ")
+                        },
+                    ),
                     ("Source", d.source_file.clone()),
                 ],
             );
@@ -2587,8 +2622,10 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             let has_mbx = s.has_mailbox();
             let has_dc = !s.device.dc_opmodes.is_empty();
+            let has_slots = !s.device.slots.is_empty();
             for (t, l, en) in [
                 (SlaveTab::General, "General", true),
+                (SlaveTab::Modules, "Modules", has_slots),
                 (SlaveTab::ProcessData, "Process Data", true),
                 (SlaveTab::Mailbox, "Mailbox / CoE", has_mbx),
                 (SlaveTab::Dc, "Distributed Clocks", has_dc),
@@ -2601,12 +2638,16 @@ impl App {
                 }
             }
         });
-        if (*page == SlaveTab::Mailbox && !s.has_mailbox()) || (*page == SlaveTab::Dc && s.device.dc_opmodes.is_empty()) {
+        if (*page == SlaveTab::Mailbox && !s.has_mailbox())
+            || (*page == SlaveTab::Dc && s.device.dc_opmodes.is_empty())
+            || (*page == SlaveTab::Modules && s.device.slots.is_empty())
+        {
             *page = SlaveTab::General;
         }
         ui.separator();
         match *page {
             SlaveTab::General => self.slave_general(ui, i),
+            SlaveTab::Modules => self.slave_modules(ui, i),
             SlaveTab::ProcessData => self.slave_pd(ui, i, lay),
             SlaveTab::Mailbox => self.slave_mailbox(ui, i),
             SlaveTab::Dc => self.slave_dc(ui, i),
@@ -2625,6 +2666,108 @@ impl App {
             }
             SlaveTab::Eeprom => self.slave_eeprom(ui, i),
             SlaveTab::Esc => self.slave_esc(ui, i, lay),
+        }
+    }
+
+    /// Slot configuration of a modular device.
+    fn slave_modules(&mut self, ui: &mut egui::Ui, i: usize) {
+        let dev = self.project.slaves[i].device.clone();
+        let mut mods = self.project.slaves[i].modules.clone();
+        let mut changed = false;
+        let mut remove: Option<usize> = None;
+        let mut swap: Option<(usize, usize)> = None;
+        let mod_name = |id: u32| {
+            dev.modules
+                .iter()
+                .find(|m| m.ident == id)
+                .map(|m| format!("{}  {}", m.type_name, short_name(&m.name, &m.type_name)))
+                .unwrap_or_else(|| format!("unknown {:#010x}", id))
+        };
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            sub_header(ui, &format!("Plugged modules ({} configured)", mods.len()));
+            if mods.is_empty() {
+                ui.label(RichText::new("No modules yet. Add them below in the order they are plugged into the device.").italics().weak());
+            } else {
+                egui::Grid::new("mods").striped(true).num_columns(6).spacing([14.0, 4.0]).show(ui, |ui| {
+                    for h in ["Position", "Slot", "Module", "Ident", "PDOs", ""] {
+                        ui.strong(h);
+                    }
+                    ui.end_row();
+                    let n = mods.len();
+                    for (k, m) in mods.iter_mut().enumerate() {
+                        let sd = dev.slots.get(m.slot);
+                        ui.label(format!("{}", k + 1));
+                        ui.label(sd.map(|s| s.name.clone()).unwrap_or_else(|| "?".into()));
+                        egui::ComboBox::from_id_salt(("modsel", k)).selected_text(mod_name(m.ident)).width(300.0).show_ui(ui, |ui| {
+                            for md in dev.modules.iter().filter(|md| sd.map(|s| s.accepts(md)).unwrap_or(false)) {
+                                if ui.selectable_label(m.ident == md.ident, format!("{}  {}", md.type_name, short_name(&md.name, &md.type_name))).clicked() {
+                                    m.ident = md.ident;
+                                    changed = true;
+                                }
+                            }
+                        });
+                        ui.monospace(hx(m.ident, 8));
+                        let np = dev.modules.iter().find(|md| md.ident == m.ident).map(|md| md.rx_pdos.len() + md.tx_pdos.len()).unwrap_or(0);
+                        ui.label(np.to_string());
+                        ui.horizontal(|ui| {
+                            if k > 0 && ui.small_button("⬆").on_hover_text("Move to the previous position").clicked() {
+                                swap = Some((k, k - 1));
+                            }
+                            if k + 1 < n && ui.small_button("⬇").on_hover_text("Move to the next position").clicked() {
+                                swap = Some((k, k + 1));
+                            }
+                            if ui.small_button("🗑").on_hover_text("Remove this module").clicked() {
+                                remove = Some(k);
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            }
+            ui.add_space(8.0);
+            sub_header(ui, "Add a module");
+            for (si, sd) in dev.slots.iter().enumerate() {
+                let count = mods.iter().filter(|m| m.slot == si).count() as u32;
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}  ({} of {} used, at least {})", sd.name, count, sd.max, sd.min));
+                    ui.add_enabled_ui(count < sd.max, |ui| {
+                        egui::ComboBox::from_id_salt(("modadd", si)).selected_text("➕ Add…").width(300.0).show_ui(ui, |ui| {
+                            for md in dev.modules.iter().filter(|md| sd.accepts(md)) {
+                                if ui.selectable_label(false, format!("{}  {}", md.type_name, short_name(&md.name, &md.type_name))).clicked() {
+                                    // keep modules of the same slot type together
+                                    let at = mods.iter().rposition(|m| m.slot <= si).map(|p| p + 1).unwrap_or(0);
+                                    mods.insert(at, ModuleInst { slot: si, ident: md.ident });
+                                    changed = true;
+                                }
+                            }
+                        });
+                    });
+                });
+            }
+            ui.add_space(8.0);
+            let sd0 = dev.slots.first();
+            ui.label(
+                RichText::new(format!(
+                    "Each position shifts the module's PDO indices by {} and its object indices (0x6000–0xAFFF) by {:#x}. The module list is downloaded to object 0xF030 in the PREOP to SAFEOP transition, together with the modules' start-up parameters.",
+                    sd0.map(|s| s.pdo_inc).unwrap_or(0),
+                    sd0.map(|s| s.index_inc).unwrap_or(0)
+                ))
+                .small()
+                .weak(),
+            );
+        });
+        if let Some(k) = remove {
+            mods.remove(k);
+            changed = true;
+        }
+        if let Some((a, b)) = swap {
+            mods.swap(a, b);
+            changed = true;
+        }
+        if changed {
+            self.project.slaves[i].set_modules(mods);
+            self.sel_pdo = None;
+            self.dirty = true;
         }
     }
 

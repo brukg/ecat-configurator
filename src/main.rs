@@ -121,6 +121,7 @@ fn headless(opts: &ui::StartOptions, eni_out: Option<PathBuf>, h_out: Option<Pat
     let mut lib = esi::EsiLibrary::default();
     let _ = lib.add_xml(esi::SAMPLE_IO, "built-in");
     let _ = lib.add_xml(esi::SAMPLE_DRIVE, "built-in");
+    let _ = lib.add_xml(esi::SAMPLE_MODULAR, "built-in");
     for p in opts.esi.iter() {
         let files: Vec<PathBuf> = if p.is_dir() {
             std::fs::read_dir(p)

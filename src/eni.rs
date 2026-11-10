@@ -661,12 +661,40 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                     eeprom: None,
                     profile_no: None,
                     source_file: "ENI".into(),
+                    slots: vec![],
+                    modules: vec![],
                 }
             }
         };
         let mut sc = SlaveCfg::from_device(&dev, phys);
         sc.name = name.clone();
         sc.serial = num(child(info, "SerialNo")) as u32;
+        // modular devices: rebuild the slots from the configured module list (0xF030)
+        if !sc.device.slots.is_empty() {
+            if let Some(ics) = mbx.and_then(|m| child(m, "CoE")).and_then(|c| child(c, "InitCmds")) {
+                let mut list: std::collections::BTreeMap<u8, u32> = std::collections::BTreeMap::new();
+                for c in kids(ics, "InitCmd") {
+                    if num(child(c, "Index")) as u16 == 0xF030 {
+                        let sub = num(child(c, "SubIndex")) as u8;
+                        let d = hex_to_bytes(&txt(child(c, "Data")));
+                        if sub > 0 && d.len() >= 4 {
+                            list.insert(sub, u32::from_le_bytes([d[0], d[1], d[2], d[3]]));
+                        }
+                    }
+                }
+                let idents: Vec<u32> = list.values().copied().collect();
+                let mods = modules_from_idents(&sc.device, &idents);
+                if mods.len() != idents.len() {
+                    notes.push(format!(
+                        "{}: {} of {} module(s) could not be matched to a slot",
+                        name,
+                        idents.len() - mods.len(),
+                        idents.len()
+                    ));
+                }
+                sc.set_modules(mods);
+            }
+        }
         // apply assignment / mapping from the ENI
         if !eni_pdos.is_empty() || !sm_assign.is_empty() {
             for pc in sc.pdos.iter_mut() {
@@ -700,6 +728,7 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                     let index = num(child(c, "Index")) as u16;
                     let generated = c.attribute("Generated").map(parse_bool).unwrap_or(false)
                         || (0x1C10..=0x1C2F).contains(&index)
+                        || index == 0xF030
                         || (0x1600..=0x17FF).contains(&index)
                         || (0x1A00..=0x1BFF).contains(&index);
                     if generated {
@@ -817,6 +846,7 @@ mod tests {
         let mut lib = EsiLibrary::default();
         lib.add_xml(SAMPLE_IO, "io").unwrap();
         lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
+        lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
         let p = demo_project(&lib);
         let xml = export_eni(&p);
         roxmltree::Document::parse(&xml).unwrap();
@@ -827,5 +857,8 @@ mod tests {
         assert_eq!(a.out_size, b.out_size);
         assert_eq!(a.in_size, b.in_size);
         assert_eq!(export_eni(&q), xml);
+        // the modular station keeps its three modules through the round trip
+        let m = q.slaves.iter().find(|s| !s.device.slots.is_empty()).unwrap();
+        assert_eq!(m.modules.iter().map(|x| x.ident).collect::<Vec<_>>(), vec![0x101, 0x102, 0x103]);
     }
 }
