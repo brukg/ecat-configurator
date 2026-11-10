@@ -17,9 +17,9 @@ whether a generated ENI works on real hardware at all.
    times~~ done in 0.14.
 4. **Complete ESI support.** ~~Object dictionary~~ done in 0.4: dictionary
    page, start-up values and PDO entries picked by name, typed values, checks
-   against access and size. Still open: `AlternativeSmMapping`, multi-channel
-   profiles (e.g. several CiA 402 axes), external dictionary files and all
-   InitCmd variants.
+   against access and size. ~~`AlternativeSmMapping` and external dictionary
+   files~~ done in 0.15. Still open: multi-channel profiles (e.g. several CiA 402
+   axes) and all InitCmd variants.
 5. **Online commissioning.** ~~INIT/PREOP/BOOT, AL status codes, error counters,
    EEPROM read/write, SDO read/write~~ done in 0.10 (frame encoding unit-tested;
    not yet tried on real hardware here), ~~segmented SDO~~ done in 0.13. Still

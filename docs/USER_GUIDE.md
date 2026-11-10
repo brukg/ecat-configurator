@@ -171,6 +171,10 @@ reference clock sits inside a group. The tree marks group heads with
   subindex, bit length, name or data type, reorder or delete entries, add gaps, or
   create a *New PDO*. With an object dictionary, **From dictionary…** adds an
   entry that may be mapped in this direction, with the right size and type.
+- **Predefined PDO assignment** (when the ESI offers `AlternativeSmMapping` sets,
+  e.g. one per drive operating mode) assigns the PDOs of the chosen set to their
+  sync managers in one step. The set marked as default in the ESI is used when the
+  slave is added; *(custom)* is shown once you change PDOs by hand.
 - *Download PDO assignment/mapping at start-up* generates the CoE commands
   (0x1C12/0x1C13 and 0x16xx/0x1Axx). If the device has no CoE PDO assignment, the
   assignment is fixed and changing it raises a validation warning.
@@ -199,7 +203,8 @@ Shows the mailbox protocols and the mailbox sizes (within the ESI limits), and t
 ### Object Dictionary
 ![Object dictionary](images/dictionary.png)
 
-Shown when the ESI contains a CoE dictionary (`Profile/Dictionary`). It lists
+Shown when the ESI contains a CoE dictionary (`Profile/Dictionary`), or names a
+separate dictionary file (`Profile/DictionaryFile`) that lies next to the ESI. It lists
 every object and subindex with type, bit size, access (ro/rw/wo), PDO mapping
 (R = RxPDO, T = TxPDO) and default value. Records and arrays are expanded into
 their entries. Use the filter box to search by index or name.
