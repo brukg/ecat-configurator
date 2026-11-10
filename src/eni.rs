@@ -168,7 +168,7 @@ pub fn export_eni(p: &Project) -> String {
             }
             if sl.in_bytes > 0 {
                 x.open("Recv");
-                x.leaf("BitStart", (lay.out_size + sl.in_offs) * 8);
+                x.leaf("BitStart", sl.in_offs * 8);
                 x.leaf("BitLength", sl.in_bytes * 8);
                 x.close("Recv");
             }
@@ -328,8 +328,9 @@ pub fn export_eni(p: &Project) -> String {
                 x.leaf("OpMode", &m.name);
                 x.leaf("AssignActivate", hx(m.assign_activate as u32, 4));
             }
-            x.leaf("CycleTime0", s.sync0_cycle(p.master.cycle_time_us));
-            x.leaf("CycleTime1", s.sync1_cycle(p.master.cycle_time_us));
+            let cyc = p.task_cycle_us(p.task_of(i));
+            x.leaf("CycleTime0", s.sync0_cycle(cyc));
+            x.leaf("CycleTime1", s.sync1_cycle(cyc));
             x.leaf("ShiftTime0", s.sync0_shift_ns);
             x.leaf("ShiftTime1", s.sync1_shift_ns);
             x.close("DC");
@@ -337,35 +338,44 @@ pub fn export_eni(p: &Project) -> String {
         x.close("Slave");
     }
     // ---- cyclic
-    x.open("Cyclic");
-    x.leaf("CycleTime", p.master.cycle_time_us);
     let total = lay.out_size + lay.in_size;
-    for f in cyclic_frames(p, &lay) {
-        x.open("Frame");
-        for c in f.cmds.iter() {
-            x.open("Cmd");
-            x.leaf("State", "PREOP");
-            x.leaf("State", "SAFEOP");
-            x.leaf("State", "OP");
-            x.leaf("Comment", &c.comment);
-            x.leaf("Cmd", c.cmd);
-            if c.cmd == CMD_BRD {
-                x.leaf("Adp", c.addr & 0xFFFF);
-                x.leaf("Ado", c.addr >> 16);
-            } else {
-                x.leaf("Addr", c.addr);
-            }
-            x.leaf("DataLength", c.len);
-            x.leaf("Cnt", c.wkc);
-            x.leaf("InputOffs", c.in_offs);
-            if c.cmd != CMD_BRD {
-                x.leaf("OutputOffs", c.out_offs);
-            }
-            x.close("Cmd");
+    let multi = p.task_count() > 1;
+    for (t, frames) in task_frames(p, &lay) {
+        x.open("Cyclic");
+        if multi {
+            x.leaf("Comment", p.task_name(t));
         }
-        x.close("Frame");
+        x.leaf("CycleTime", p.task_cycle_us(t));
+        if multi {
+            x.leaf("TaskId", t);
+        }
+        for f in frames {
+            x.open("Frame");
+            for c in f.cmds.iter() {
+                x.open("Cmd");
+                x.leaf("State", "PREOP");
+                x.leaf("State", "SAFEOP");
+                x.leaf("State", "OP");
+                x.leaf("Comment", &c.comment);
+                x.leaf("Cmd", c.cmd);
+                if c.cmd == CMD_BRD {
+                    x.leaf("Adp", c.addr & 0xFFFF);
+                    x.leaf("Ado", c.addr >> 16);
+                } else {
+                    x.leaf("Addr", c.addr);
+                }
+                x.leaf("DataLength", c.len);
+                x.leaf("Cnt", c.wkc);
+                x.leaf("InputOffs", c.in_offs);
+                if c.cmd != CMD_BRD {
+                    x.leaf("OutputOffs", c.out_offs);
+                }
+                x.close("Cmd");
+            }
+            x.close("Frame");
+        }
+        x.close("Cyclic");
     }
-    x.close("Cyclic");
 
     // ---- process image
     x.open("ProcessImage");
@@ -376,7 +386,7 @@ pub fn export_eni(p: &Project) -> String {
     }
     x.close("Inputs");
     x.open("Outputs");
-    x.leaf("ByteSize", lay.out_size);
+    x.leaf("ByteSize", lay.out_image);
     for v in lay.vars.iter().filter(|v| !v.is_input) {
         write_var(&mut x, v);
     }
@@ -502,9 +512,16 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
             }
         }
     }
-    if let Some(c) = child(cfg, "Cyclic") {
-        let ct = num(child(c, "CycleTime"));
-        if ct > 0 {
+    // process data commands of every task: (task, logical address, length)
+    let mut task_ranges: Vec<(usize, u32, u32)> = Vec::new();
+    let cyclics: Vec<roxmltree::Node> = kids(cfg, "Cyclic").collect();
+    if !cyclics.is_empty() {
+        let mut lrw = false;
+        let mut first_log: Option<u32> = None;
+        let mut frame_sizes: Vec<u32> = Vec::new();
+        let mut pd_cmds = 0usize;
+        for (ti, c) in cyclics.iter().enumerate() {
+            let ct = num(child(*c, "CycleTime"));
             // Most tools write microseconds; some write nanoseconds (e.g. 1000000 for 1 ms).
             let us = if ct >= 1_000_000 && ct % 1000 == 0 {
                 notes.push(format!("Cycle time {} read as nanoseconds ({} µs)", ct, ct / 1000));
@@ -512,31 +529,37 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
             } else {
                 ct
             };
-            p.master.cycle_time_us = us.clamp(1, 10_000_000) as u32;
-        }
-        let mut lrw = false;
-        let mut first_log: Option<u32> = None;
-        let mut frame_sizes: Vec<u32> = Vec::new();
-        let mut pd_cmds = 0usize;
-        for f in kids(c, "Frame") {
-            frame_sizes.push(kids(f, "Cmd").fold(2u32, |acc, cmd| {
-                acc.saturating_add(12)
-                    .saturating_add(num(child(cmd, "DataLength")).clamp(0, u32::MAX as i64) as u32)
-            }));
-            // the mailbox state read is not process data
-            let is_pd = |cmd: roxmltree::Node| {
-                matches!(num(child(cmd, "Cmd")) as u8, CMD_LRW | CMD_LWR | CMD_LRD)
-                    && !(p.master.mbx_state_polling && num(child(cmd, "Addr")) as u32 == p.master.mbx_state_start)
-            };
-            pd_cmds += kids(f, "Cmd").filter(|cmd| is_pd(*cmd)).count();
-            for cmd in kids(f, "Cmd") {
-                let code = num(child(cmd, "Cmd")) as u8;
-                if is_pd(cmd) {
-                    if code == CMD_LRW {
-                        lrw = true;
+            let us = if ct > 0 { us.clamp(1, 10_000_000) as u32 } else { p.master.cycle_time_us };
+            if ti == 0 {
+                p.master.cycle_time_us = us;
+            } else {
+                let name = txt(child(*c, "Comment"));
+                p.master.tasks.push(TaskCfg {
+                    name: if name.is_empty() { format!("Task {}", ti + 1) } else { name },
+                    cycle_time_us: us,
+                });
+            }
+            for f in kids(*c, "Frame") {
+                frame_sizes.push(kids(f, "Cmd").fold(2u32, |acc, cmd| {
+                    acc.saturating_add(12)
+                        .saturating_add(num(child(cmd, "DataLength")).clamp(0, u32::MAX as i64) as u32)
+                }));
+                // the mailbox state read is not process data
+                let is_pd = |cmd: roxmltree::Node| {
+                    matches!(num(child(cmd, "Cmd")) as u8, CMD_LRW | CMD_LWR | CMD_LRD)
+                        && !(p.master.mbx_state_polling && num(child(cmd, "Addr")) as u32 == p.master.mbx_state_start)
+                };
+                pd_cmds += kids(f, "Cmd").filter(|cmd| is_pd(*cmd)).count();
+                for cmd in kids(f, "Cmd") {
+                    let code = num(child(cmd, "Cmd")) as u8;
+                    if is_pd(cmd) {
+                        if code == CMD_LRW {
+                            lrw = true;
+                        }
+                        let a = num(child(cmd, "Addr")) as u32;
+                        first_log = Some(first_log.map(|x: u32| x.min(a)).unwrap_or(a));
+                        task_ranges.push((ti, a, num(child(cmd, "DataLength")).clamp(0, u32::MAX as i64) as u32));
                     }
-                    let a = num(child(cmd, "Addr")) as u32;
-                    first_log = Some(first_log.map(|x: u32| x.min(a)).unwrap_or(a));
                 }
             }
         }
@@ -561,6 +584,9 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
         let product = num(child(info, "ProductCode")) as u32;
         let revision = num(child(info, "RevisionNo")) as u32;
         let pd = child(s, "ProcessData");
+        let pd_off: Option<u32> = pd
+            .and_then(|pd| child(pd, "Send").or_else(|| child(pd, "Recv")))
+            .map(|x| (num(child(x, "BitStart")).max(0) as u32) / 8);
         let eni_pdos: Vec<(Pdo, bool, bool)> = pd
             .map(|pd| {
                 let mut v: Vec<(Pdo, bool, bool)> = kids(pd, "RxPdo")
@@ -752,6 +778,12 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
             }
         };
         let mut sc = SlaveCfg::from_device(&dev, phys);
+        if let Some(off) = pd_off {
+            let a = p.master.log_start.wrapping_add(off);
+            if let Some((t, _, _)) = task_ranges.iter().find(|(_, start, len)| a >= *start && a < start.saturating_add(*len)) {
+                sc.task = *t;
+            }
+        }
         sc.name = name.clone();
         sc.serial = num(child(info, "SerialNo")) as u32;
         // modular devices: rebuild the slots from the configured module list (0xF030)
@@ -914,12 +946,17 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                         sc.dc_mode = Some(k);
                     }
                 }
+                let cyc = if sc.task == 0 {
+                    p.master.cycle_time_us
+                } else {
+                    p.master.tasks.get(sc.task - 1).map(|t| t.cycle_time_us).unwrap_or(p.master.cycle_time_us)
+                };
                 let c0 = num(child(dc, "CycleTime0")) as u32;
-                if c0 != p.master.cycle_time_us.saturating_mul(1000) {
+                if c0 != cyc.saturating_mul(1000) {
                     sc.sync0_cycle_ns = c0;
                 }
                 let c1 = num(child(dc, "CycleTime1")) as u32;
-                if c1 != sc.sync1_cycle(p.master.cycle_time_us) {
+                if c1 != sc.sync1_cycle(cyc) {
                     sc.sync1_cycle_ns = c1;
                 }
                 sc.sync0_shift_ns = num(child(dc, "ShiftTime0").or_else(|| child(dc, "ShiftTime"))) as i32;

@@ -36,6 +36,19 @@ pub fn c_header(p: &Project, lay: &NetLayout) -> String {
     s.push_str(&format!("#define ECAT_INPUT_OFFSET       {}u\n", lay.out_size));
     s.push_str(&format!("#define ECAT_INPUT_BYTES        {}u\n", lay.in_size));
     let frames = cyclic_frames(p, lay);
+    if p.task_count() > 1 {
+        for t in 0..p.task_count() {
+            let tl = lay.tasks.get(t).cloned().unwrap_or_default();
+            s.push_str(&format!(
+                "#define ECAT_TASK{}_CYCLE_US     {}u /* {}: image bytes {}..{} */\n",
+                t,
+                p.task_cycle_us(t),
+                p.task_name(t),
+                tl.start,
+                tl.end()
+            ));
+        }
+    }
     s.push_str(&format!(
         "#define ECAT_EXPECTED_WKC       {}u /* sum over all process data commands */\n",
         process_data_wkc(&frames)

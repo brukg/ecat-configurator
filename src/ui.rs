@@ -1901,6 +1901,9 @@ impl App {
                     if let Some(h) = &s.hot_connect {
                         text.push_str(&format!("  [hot connect ×{}]", h.members));
                     }
+                    if !self.project.master.tasks.is_empty() {
+                        text.push_str(&format!("  [T{}]", self.project.task_of(i) + 1));
+                    }
                     if refc == Some(i) {
                         text.push_str("  ⏱");
                     }
@@ -2774,7 +2777,7 @@ impl App {
             ui.add_space(8.0);
             sub_header(ui, "Cyclic process data");
             egui::Grid::new("mcyc").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
-                ui.label("Cycle time");
+                ui.label(if m.tasks.is_empty() { "Cycle time" } else { "Cycle time (task 1)" });
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut m.cycle_time_us)
@@ -2820,6 +2823,54 @@ impl App {
                 });
                 ui.end_row();
             });
+            ui.add_space(8.0);
+            sub_header(ui, "Further cyclic tasks");
+            ui.label(
+                RichText::new("Slaves of a task get their own logical area and frames, sent at the task's cycle time. Assign slaves on their General page.")
+                    .small()
+                    .weak(),
+            );
+            let mut del: Option<usize> = None;
+            egui::Grid::new("mtasks").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (k, t) in m.tasks.iter_mut().enumerate() {
+                    ui.label(format!("Task {}", k + 2));
+                    changed |= ui.add(egui::TextEdit::singleline(&mut t.name).desired_width(160.0).hint_text("name")).changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut t.cycle_time_us)
+                                .range(50..=1_000_000)
+                                .clamp_existing_to_range(false)
+                                .suffix(" µs")
+                                .speed(10),
+                        )
+                        .changed();
+                    if ui.small_button("🗑").on_hover_text("Remove the task; its slaves move to task 1").clicked() {
+                        del = Some(k);
+                    }
+                    ui.end_row();
+                }
+            });
+            if ui.small_button("➕ Add task").clicked() {
+                let n = m.tasks.len() + 2;
+                m.tasks.push(TaskCfg {
+                    name: format!("Task {}", n),
+                    cycle_time_us: m.cycle_time_us.saturating_mul(4).max(50),
+                });
+                changed = true;
+            }
+            if let Some(k) = del {
+                m.tasks.remove(k);
+                let gone = k + 1;
+                for sl in self.project.slaves.iter_mut() {
+                    if sl.task == gone {
+                        sl.task = 0;
+                    } else if sl.task > gone {
+                        sl.task -= 1;
+                    }
+                }
+                changed = true;
+            }
+            let m = &mut self.project.master;
             ui.add_space(8.0);
             sub_header(ui, "State machine timeouts");
             egui::Grid::new("mto").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
@@ -2888,7 +2939,7 @@ impl App {
         });
         ui.add_space(6.0);
         sub_header(ui, "DC capable slaves");
-        let cyc = p.master.cycle_time_us;
+        let cycles: Vec<u32> = (0..p.slaves.len()).map(|i| p.task_cycle_us(p.task_of(i))).collect();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Grid::new("dcs").striped(true).num_columns(7).spacing([14.0, 4.0]).show(ui, |ui| {
                 for h in ["Addr", "Name", "Operation mode", "AssignActivate", "SYNC0 cycle", "SYNC0 shift", "SYNC1 cycle"] {
@@ -2903,9 +2954,9 @@ impl App {
                     ui.label(format!("{}{}", s.name, if refc == Some(i) { "  ⏱ ref" } else { "" }));
                     changed |= dc_mode_combo(ui, ("dcm", i), s);
                     ui.monospace(hx(s.dc_opmode().map(|m| m.assign_activate as u32).unwrap_or(0), 4));
-                    ui.label(format!("{} ns", s.sync0_cycle(cyc)));
+                    ui.label(format!("{} ns", s.sync0_cycle(cycles[i])));
                     ui.label(format!("{} ns", s.sync0_shift_ns));
-                    ui.label(format!("{} ns", s.sync1_cycle(cyc)));
+                    ui.label(format!("{} ns", s.sync1_cycle(cycles[i])));
                     ui.end_row();
                 }
             });
@@ -2946,27 +2997,41 @@ impl App {
 
     fn master_cyclic(&mut self, ui: &mut egui::Ui, lay: &NetLayout) {
         let p = &self.project;
-        let frames = cyclic_frames(p, lay);
-        let wire: f32 = frames.iter().map(|f| f.wire_us()).sum();
+        let tf = task_frames(p, lay);
+        let load: f32 = tf
+            .iter()
+            .map(|(t, fr)| {
+                let w: f32 = fr.iter().map(|f| f.wire_us()).sum();
+                let c = p.task_cycle_us(*t);
+                if c > 0 {
+                    w / c as f32
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        let nframes: usize = tf.iter().map(|x| x.1.len()).sum();
         ui.label(format!(
-            "{} frame(s) per {} µs cycle · {:.0} µs on the wire ({:.0}% bus load) · up to {} data bytes per frame (change on the General page)",
-            frames.len(),
-            p.master.cycle_time_us,
-            wire,
-            if p.master.cycle_time_us > 0 {
-                wire * 100.0 / p.master.cycle_time_us as f32
-            } else {
-                0.0
-            },
+            "{} frame(s) in {} task(s) · {:.0}% bus load on 100 Mbit/s · up to {} data bytes per frame (change on the General page)",
+            nframes,
+            tf.len(),
+            load * 100.0,
             p.master.max_frame_data
         ));
+        let frames: Vec<(usize, CyclicFrame)> = tf.iter().flat_map(|(t, fr)| fr.iter().map(move |f| (*t, f.clone()))).collect();
         ui.add_space(6.0);
         egui::ScrollArea::vertical()
             .id_salt("cycfr")
             .max_height(ui.available_height() * 0.55)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                for (fi, f) in frames.iter().enumerate() {
+                let mut last_task = usize::MAX;
+                for (fi, (t, f)) in frames.iter().enumerate() {
+                    if *t != last_task && tf.len() > 1 {
+                        last_task = *t;
+                        let w: f32 = tf[*t].1.iter().map(|f| f.wire_us()).sum();
+                        ui.label(RichText::new(format!("{} — every {} µs, {:.0} µs on the wire", p.task_name(*t), p.task_cycle_us(*t), w)).strong());
+                    }
                     sub_header(ui, &format!("Frame {} — {} of {} bytes", fi + 1, f.bytes(), ETH_PAYLOAD));
                     egui::Grid::new(("cyc", fi)).striped(true).num_columns(7).spacing([16.0, 4.0]).show(ui, |ui| {
                         for h in ["Cmd", "Address", "Length", "Expected WKC", "Input offs", "Output offs", "Comment"] {
@@ -3491,6 +3556,10 @@ impl App {
 
     fn slave_general(&mut self, ui: &mut egui::Ui, i: usize) {
         let wiring_before = (self.project.slaves[i].parent, self.project.slaves[i].parent_port);
+        let task_count = self.project.task_count();
+        let task_names: Vec<String> = (0..task_count)
+            .map(|t| format!("{} · {} µs", self.project.task_name(t), self.project.task_cycle_us(t)))
+            .collect();
         let names: Vec<(u16, String, usize)> = self
             .project
             .slaves
@@ -3515,6 +3584,14 @@ impl App {
                 ui.end_row();
                 ui.label("Serial number");
                 changed |= ui.add(egui::DragValue::new(&mut s.serial)).changed();
+                ui.end_row();
+                ui.label("Cyclic task");
+                let tnames: Vec<String> = (0..task_count).map(|t| task_names[t].clone()).collect();
+                egui::ComboBox::from_id_salt("stask").selected_text(tnames.get(s.task).cloned().unwrap_or_else(|| "?".into())).width(240.0).show_ui(ui, |ui| {
+                    for (t, n) in tnames.iter().enumerate() {
+                        changed |= ui.selectable_value(&mut s.task, t, n).changed();
+                    }
+                });
                 ui.end_row();
                 ui.label("Connected to");
                 ui.horizontal(|ui| {
@@ -4328,7 +4405,7 @@ impl App {
     }
 
     fn slave_dc(&mut self, ui: &mut egui::Ui, i: usize) {
-        let cyc = self.project.master.cycle_time_us;
+        let cyc = self.project.task_cycle_us(self.project.task_of(i));
         let refc = self.project.ref_clock_index();
         let dc_on = self.project.master.dc_enabled;
         let mut changed = false;

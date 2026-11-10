@@ -59,6 +59,15 @@ pub struct MasterCfg {
     pub mbx_state_polling: bool,
     #[serde(default = "default_mbx_state_start")]
     pub mbx_state_start: u32,
+    /// Extra cyclic tasks with their own cycle time (task 0 is the master cycle above).
+    #[serde(default)]
+    pub tasks: Vec<TaskCfg>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskCfg {
+    pub name: String,
+    pub cycle_time_us: u32,
 }
 
 fn default_mbx_state_start() -> u32 {
@@ -85,6 +94,7 @@ impl Default for MasterCfg {
             ref_clock: None,
             mbx_state_polling: false,
             mbx_state_start: default_mbx_state_start(),
+            tasks: Vec::new(),
         }
     }
 }
@@ -147,6 +157,9 @@ pub struct SlaveCfg {
     /// Set on the first slave of a hot-connect group.
     #[serde(default)]
     pub hot_connect: Option<HotConnect>,
+    /// Cyclic task the slave's process data belongs to (0 = master cycle).
+    #[serde(default)]
+    pub task: usize,
 }
 
 /// A hot-connect group: this slave and the next `members - 1` slaves may be missing or
@@ -365,6 +378,7 @@ impl SlaveCfg {
             soe_cmds: Vec::new(),
             eoe: Default::default(),
             hot_connect: None,
+            task: 0,
         }
     }
 
@@ -624,6 +638,36 @@ impl Project {
         }
     }
 
+    pub fn task_count(&self) -> usize {
+        1 + self.master.tasks.len()
+    }
+
+    /// Task of slave i (out-of-range tasks fall back to the master cycle).
+    pub fn task_of(&self, i: usize) -> usize {
+        self.slaves.get(i).map(|s| s.task).filter(|t| *t < self.task_count()).unwrap_or(0)
+    }
+
+    pub fn task_cycle_us(&self, t: usize) -> u32 {
+        if t == 0 {
+            self.master.cycle_time_us
+        } else {
+            self.master.tasks.get(t - 1).map(|x| x.cycle_time_us).unwrap_or(self.master.cycle_time_us)
+        }
+    }
+
+    pub fn task_name(&self, t: usize) -> String {
+        if t == 0 {
+            "Task 1 (master cycle)".into()
+        } else {
+            self.master
+                .tasks
+                .get(t - 1)
+                .map(|x| x.name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| format!("Task {}", t + 1))
+        }
+    }
+
     pub fn ref_clock_index(&self) -> Option<usize> {
         if !self.master.dc_enabled {
             return None;
@@ -725,6 +769,23 @@ pub struct NetLayout {
     /// Slaves whose mailbox state is mapped, and the bytes of that area.
     pub mbx_state_count: u32,
     pub mbx_state_bytes: u32,
+    /// One logical area per cyclic task (image offsets from the logical start).
+    pub tasks: Vec<TaskLayout>,
+    /// Bytes of the output image (end of the last task's outputs).
+    pub out_image: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TaskLayout {
+    pub start: u32,
+    pub out_size: u32,
+    pub in_size: u32,
+}
+
+impl TaskLayout {
+    pub fn end(&self) -> u32 {
+        self.start + self.out_size + self.in_size
+    }
 }
 
 impl NetLayout {
@@ -816,8 +877,19 @@ fn range_wkc(lay: &NetLayout, cmd: u8, a: u32, b: u32) -> u16 {
 
 /// The cyclic frames sent every cycle: process data split to fit the frame size,
 /// packed into as few frames as possible, plus a BRD of the AL status.
+/// All cyclic frames of all tasks, in task order.
 pub fn cyclic_frames(p: &Project, lay: &NetLayout) -> Vec<CyclicFrame> {
+    task_frames(p, lay).into_iter().flat_map(|(_, f)| f).collect()
+}
+
+/// The frames of every task. Task 0 also carries the AL status read and the mailbox states.
+pub fn task_frames(p: &Project, lay: &NetLayout) -> Vec<(usize, Vec<CyclicFrame>)> {
+    (0..lay.tasks.len()).map(|t| (t, frames_of_task(p, lay, t))).collect()
+}
+
+fn frames_of_task(p: &Project, lay: &NetLayout, task: usize) -> Vec<CyclicFrame> {
     let limit = p.master.max_frame_data.clamp(16, ETH_PAYLOAD - 14);
+    let tl = lay.tasks.get(task).cloned().unwrap_or_default();
     let total = lay.out_size + lay.in_size;
     let mut cuts: Vec<u32> = Vec::new();
     for sl in lay.slaves.iter() {
@@ -827,18 +899,18 @@ pub fn cyclic_frames(p: &Project, lay: &NetLayout) -> Vec<CyclicFrame> {
             cuts.push(fs + f.len as u32);
         }
     }
-    cuts.push(lay.out_size);
+    cuts.push(tl.start + tl.out_size);
     let mut pieces: Vec<(u8, u32, u32, &str)> = Vec::new();
-    if total > 0 {
+    if tl.end() > tl.start {
         if p.master.use_lrw {
-            for (a, b) in split_range(0, total, limit, &cuts) {
+            for (a, b) in split_range(tl.start, tl.end(), limit, &cuts) {
                 pieces.push((CMD_LRW, a, b, "process data (LRW)"));
             }
         } else {
-            for (a, b) in split_range(0, lay.out_size, limit, &cuts) {
+            for (a, b) in split_range(tl.start, tl.start + tl.out_size, limit, &cuts) {
                 pieces.push((CMD_LWR, a, b, "outputs (LWR)"));
             }
-            for (a, b) in split_range(lay.out_size, total, limit, &cuts) {
+            for (a, b) in split_range(tl.start + tl.out_size, tl.end(), limit, &cuts) {
                 pieces.push((CMD_LRD, a, b, "inputs (LRD)"));
             }
         }
@@ -867,6 +939,10 @@ pub fn cyclic_frames(p: &Project, lay: &NetLayout) -> Vec<CyclicFrame> {
         if let Some(f) = frames.last_mut() {
             f.cmds.push(c);
         }
+    }
+    if task != 0 {
+        frames.retain(|f| !f.cmds.is_empty());
+        return frames;
     }
     let brd = CyclicCmd {
         cmd: CMD_BRD,
@@ -926,9 +1002,8 @@ pub fn sm_bytes(start: u16, len: u16, control: u8, enable: bool) -> Vec<u8> {
 
 pub fn compute_layout(p: &Project) -> NetLayout {
     let mut lay = NetLayout::default();
-    let mut out_cursor = 0u32;
-    let mut slave_out = Vec::new();
-    // pass 1: SM sizes and output layout
+    // pass 1: sync managers and sizes of every slave
+    let mut sls: Vec<SlaveLayout> = Vec::with_capacity(p.slaves.len());
     for s in p.slaves.iter() {
         let mut sl = SlaveLayout::default();
         for (i, sm) in s.device.sms.iter().enumerate() {
@@ -953,26 +1028,42 @@ pub fn compute_layout(p: &Project) -> NetLayout {
                 pdos,
             });
         }
-        sl.out_offs = out_cursor;
-        for sm in sl.sms.iter().filter(|x| x.kind == SmKind::Outputs && x.len > 0) {
-            sl.out_bytes += sm.len as u32;
-        }
+        sl.out_bytes = sl.sms.iter().filter(|x| x.kind == SmKind::Outputs && x.len > 0).map(|x| x.len as u32).sum();
+        sl.in_bytes = sl.sms.iter().filter(|x| x.kind == SmKind::Inputs && x.len > 0).map(|x| x.len as u32).sum();
         sl.out_bits = s.assigned(false).map(|pc| pc.pdo.bit_len()).sum();
-        out_cursor += sl.out_bytes;
-        slave_out.push(sl);
-    }
-    lay.out_size = out_cursor;
-    lay.out_log = p.master.log_start;
-    lay.in_log = p.master.log_start.wrapping_add(out_cursor);
-    let mut in_cursor = 0u32;
-    for (si, (s, mut sl)) in p.slaves.iter().zip(slave_out.into_iter()).enumerate() {
-        sl.in_offs = in_cursor;
-        for sm in sl.sms.iter().filter(|x| x.kind == SmKind::Inputs && x.len > 0) {
-            sl.in_bytes += sm.len as u32;
-        }
         sl.in_bits = s.assigned(true).map(|pc| pc.pdo.bit_len()).sum();
-        in_cursor += sl.in_bytes;
-        // FMMUs + variables
+        sls.push(sl);
+    }
+    // pass 2: one logical area per task: the task's outputs, then its inputs
+    let mut base = 0u32;
+    for t in 0..p.task_count() {
+        let members: Vec<usize> = (0..p.slaves.len()).filter(|&i| p.task_of(i) == t).collect();
+        let mut o = base;
+        for &i in members.iter() {
+            sls[i].out_offs = o;
+            o += sls[i].out_bytes;
+        }
+        let out_size = o - base;
+        let mut ii = o;
+        for &i in members.iter() {
+            sls[i].in_offs = ii;
+            ii += sls[i].in_bytes;
+        }
+        let tl = TaskLayout {
+            start: base,
+            out_size,
+            in_size: ii - o,
+        };
+        lay.out_image = lay.out_image.max(tl.start + tl.out_size);
+        base = tl.end();
+        lay.tasks.push(tl);
+    }
+    lay.out_log = p.master.log_start;
+    lay.out_size = lay.tasks.iter().map(|t| t.out_size).sum();
+    lay.in_size = lay.tasks.iter().map(|t| t.in_size).sum();
+    lay.in_log = p.master.log_start.wrapping_add(lay.tasks[0].out_size);
+    // pass 3: FMMUs and variables (offsets are image offsets = logical address - start)
+    for (si, (s, mut sl)) in p.slaves.iter().zip(sls.into_iter()).enumerate() {
         let mut o = sl.out_offs;
         let mut ii = sl.in_offs;
         for sm in sl.sms.clone().iter() {
@@ -981,13 +1072,8 @@ pub fn compute_layout(p: &Project) -> NetLayout {
                 continue;
             }
             let img_byte = if is_out { o } else { ii };
-            let log = if is_out {
-                lay.out_log.wrapping_add(img_byte)
-            } else {
-                lay.in_log.wrapping_add(img_byte)
-            };
             sl.fmmus.push(FmmuLayout {
-                log_start: log,
+                log_start: lay.out_log.wrapping_add(img_byte),
                 len: sm.len,
                 log_start_bit: 0,
                 log_end_bit: 7,
@@ -997,7 +1083,7 @@ pub fn compute_layout(p: &Project) -> NetLayout {
                 sm: sm.index,
                 mbx_state: false,
             });
-            let mut bit = if is_out { img_byte * 8 } else { (lay.out_size + img_byte) * 8 };
+            let mut bit = img_byte * 8;
             for pidx in sm.pdos.iter() {
                 if let Some(pc) = s.pdos.iter().find(|pc| pc.pdo.index == *pidx && pc.assigned && pc.sm == sm.index) {
                     for e in pc.pdo.entries.iter() {
@@ -1049,7 +1135,6 @@ pub fn compute_layout(p: &Project) -> NetLayout {
         }
         lay.slaves.push(sl);
     }
-    lay.in_size = in_cursor;
     lay
 }
 
@@ -1256,8 +1341,9 @@ pub fn slave_init_cmds(p: &Project, lay: &NetLayout, i: usize) -> Vec<EcInitCmd>
     }
     if p.master.dc_enabled && s.dc_active() {
         let mut d = Vec::new();
-        d.extend_from_slice(&s.sync0_cycle(m.cycle_time_us).to_le_bytes());
-        d.extend_from_slice(&s.sync1_cycle(m.cycle_time_us).to_le_bytes());
+        let cyc = p.task_cycle_us(p.task_of(i));
+        d.extend_from_slice(&s.sync0_cycle(cyc).to_le_bytes());
+        d.extend_from_slice(&s.sync1_cycle(cyc).to_le_bytes());
         v.push(ic(&["PS"], "DC: set sync0/sync1 cycle time", CMD_FPWR, a, 0x09A0, d));
         let aa = s.dc_opmode().map(|o| o.assign_activate).unwrap_or(0);
         v.push(ic(
@@ -1433,16 +1519,28 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
             ),
         );
     }
-    let wire: f32 = frames.iter().map(|f| f.wire_us()).sum();
-    if p.master.cycle_time_us > 0 && wire > p.master.cycle_time_us as f32 * 0.5 {
+    // bus load: every task's frames are sent once per its cycle
+    let mut load = 0.0f32;
+    for (t, fr) in task_frames(p, lay) {
+        let wire: f32 = fr.iter().map(|f| f.wire_us()).sum();
+        let cyc = p.task_cycle_us(t);
+        if cyc > 0 {
+            load += wire / cyc as f32;
+        }
+        if t > 0 && !(0..p.slaves.len()).any(|i| p.task_of(i) == t) {
+            push(Severity::Warning, None, format!("{} has no slaves.", p.task_name(t)));
+        }
+        if t > 0 && cyc == 0 {
+            push(Severity::Error, None, format!("{}: cycle time must be greater than 0.", p.task_name(t)));
+        }
+    }
+    if load > 0.5 {
         push(
             Severity::Warning,
             None,
             format!(
-                "The cyclic frames need {:.0} µs on the wire, {:.0}% of the {} µs cycle; use a longer cycle time.",
-                wire,
-                wire * 100.0 / p.master.cycle_time_us as f32,
-                p.master.cycle_time_us
+                "The cyclic frames use {:.0}% of the 100 Mbit/s wire; use longer cycle times or fewer frames.",
+                load * 100.0
             ),
         );
     }
@@ -1750,7 +1848,14 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
                 format!("{}: DC mode selected but distributed clocks are disabled in the master.", s.name),
             );
         }
-        if s.dc_active() && p.master.dc_enabled && s.sync0_cycle(p.master.cycle_time_us) == 0 {
+        if s.task >= p.task_count() {
+            push(
+                Severity::Error,
+                Some(i),
+                format!("{}: belongs to task {}, which does not exist.", s.name, s.task + 1),
+            );
+        }
+        if s.dc_active() && p.master.dc_enabled && s.sync0_cycle(p.task_cycle_us(p.task_of(i))) == 0 {
             push(Severity::Error, Some(i), format!("{}: SYNC0 cycle time is 0.", s.name));
         }
     }
@@ -1954,6 +2059,44 @@ mod tests {
         assert_eq!(q.master.log_start, p.master.log_start);
         assert_eq!(q.master.max_frame_data, p.master.max_frame_data);
         assert_eq!(crate::eni::export_eni(&q), xml);
+    }
+
+    #[test]
+    fn tasks_get_own_areas_frames_and_cyclic_blocks() {
+        let mut p = demo_project(&demo_lib());
+        p.master.tasks.push(TaskCfg {
+            name: "Motion".into(),
+            cycle_time_us: 250,
+        });
+        // the two drives run in the fast task
+        for s in p.slaves.iter_mut().filter(|s| s.device.type_name == "SD200") {
+            s.task = 1;
+        }
+        let lay = compute_layout(&p);
+        assert_eq!(lay.tasks.len(), 2);
+        assert_eq!(lay.tasks[1].start, lay.tasks[0].end());
+        assert_eq!(lay.tasks[1].out_size, 16);
+        assert_eq!(lay.tasks[1].in_size, 32);
+        let tf = task_frames(&p, &lay);
+        let pd = |t: usize| -> Vec<CyclicCmd> { tf[t].1.iter().flat_map(|f| f.cmds.clone()).filter(|c| c.cmd != CMD_BRD).collect() };
+        assert_eq!(pd(1).len(), 1);
+        assert_eq!(pd(1)[0].addr, lay.out_log + lay.tasks[1].start);
+        assert_eq!(pd(1)[0].wkc, 6); // two drives with outputs and inputs
+        assert!(tf[1].1.iter().all(|f| f.cmds.iter().all(|c| c.cmd != CMD_BRD)));
+        // drive DC follows the 250 us task
+        let k = p.slaves.iter().position(|s| s.device.type_name == "SD200").unwrap();
+        assert_eq!(p.slaves[k].sync0_cycle(p.task_cycle_us(p.task_of(k))), 250_000);
+        let xml = crate::eni::export_eni(&p);
+        assert_eq!(xml.matches("<Cyclic>").count(), 2);
+        let (q, _) = crate::eni::import_eni(&xml, &demo_lib()).unwrap();
+        assert_eq!(q.master.tasks, p.master.tasks);
+        assert_eq!(
+            q.slaves.iter().map(|s| s.task).collect::<Vec<_>>(),
+            p.slaves.iter().map(|s| s.task).collect::<Vec<_>>()
+        );
+        assert_eq!(crate::eni::export_eni(&q), xml);
+        let lay = compute_layout(&p);
+        assert!(!validate(&p, &lay).iter().any(|x| x.sev == Severity::Error));
     }
 
     #[test]
