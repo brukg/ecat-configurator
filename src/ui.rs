@@ -2749,7 +2749,7 @@ impl App {
                     ),
                 }
             };
-            let line = Stroke::new(1.5, Color32::from_rgb(110, 125, 145));
+            let line = Stroke::new(1.5_f32, Color32::from_rgb(110, 125, 145));
             for i in 0..n {
                 let r = rect_of(Some(i));
                 let pr = rect_of(p.slaves[i].parent);
@@ -2769,7 +2769,7 @@ impl App {
                 painter.rect_stroke(
                     r,
                     4.0,
-                    Stroke::new(if sel { 2.0 } else { 1.0 }, if sel { ACCENT } else { Color32::from_gray(150) }),
+                    Stroke::new(if sel { 2.0_f32 } else { 1.0_f32 }, if sel { ACCENT } else { Color32::from_gray(150) }),
                     egui::StrokeKind::Inside,
                 );
                 painter.text(
@@ -4420,7 +4420,7 @@ fn coe_grid_ro(ui: &mut egui::Ui, id: &str, cmds: &[CoeInitCmd], dict: &[od::OdO
 fn setup_style(ctx: &egui::Context) {
     let mut v = egui::Visuals::light();
     v.selection.bg_fill = Color32::from_rgb(200, 222, 245);
-    v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(0, 70, 140));
+    v.selection.stroke = Stroke::new(1.0_f32, Color32::from_rgb(0, 70, 140));
     v.panel_fill = Color32::from_rgb(246, 247, 249);
     v.window_fill = Color32::WHITE;
     v.extreme_bg_color = Color32::WHITE;
