@@ -1,0 +1,22 @@
+[package]
+name = "ecat-configurator"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ecat-configurator"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_extras = { version = "0.31" }
+egui_dock = { version = "0.16", features = ["serde"] }
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
+
+[profile.release]
+opt-level = 2

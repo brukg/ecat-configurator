@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EtherCATInfo Version="1.6">
+  <Vendor>
+    <Id>#x0000E1A0</Id>
+    <Name>Example Automation</Name>
+  </Vendor>
+  <Descriptions>
+    <Groups>
+      <Group><Type>Drives</Type><Name>Servo Drives</Name></Group>
+    </Groups>
+    <Devices>
+      <Device Physics="YY">
+        <Type ProductCode="#x00100200" RevisionNo="#x00020001">SD200</Type>
+        <Name>SD200 Servo Drive CiA402</Name>
+        <GroupType>Drives</GroupType>
+        <Profile><ProfileNo>402</ProfileNo><AddInfo>2</AddInfo></Profile>
+        <Fmmu>Outputs</Fmmu>
+        <Fmmu>Inputs</Fmmu>
+        <Fmmu>MBoxState</Fmmu>
+        <Sm MinSize="34" MaxSize="512" DefaultSize="256" StartAddress="#x1000" ControlByte="#x26" Enable="1">MBoxOut</Sm>
+        <Sm MinSize="34" MaxSize="512" DefaultSize="256" StartAddress="#x1400" ControlByte="#x22" Enable="1">MBoxIn</Sm>
+        <Sm MaxSize="64" StartAddress="#x1800" ControlByte="#x64" Enable="1">Outputs</Sm>
+        <Sm MaxSize="64" StartAddress="#x1C00" ControlByte="#x20" Enable="1">Inputs</Sm>
+        <RxPdo Sm="2"><Index>#x1600</Index><Name>Receive PDO 1 (CSP)</Name><Exclude>#x1601</Exclude>
+          <Entry><Index>#x6040</Index><SubIndex>0</SubIndex><BitLen>16</BitLen><Name>Controlword</Name><DataType>UINT</DataType></Entry>
+          <Entry><Index>#x607A</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Target position</Name><DataType>DINT</DataType></Entry>
+          <Entry><Index>#x60B8</Index><SubIndex>0</SubIndex><BitLen>16</BitLen><Name>Touch probe function</Name><DataType>UINT</DataType></Entry>
+        </RxPdo>
+        <RxPdo><Index>#x1601</Index><Name>Receive PDO 2 (CSV)</Name><Exclude>#x1600</Exclude>
+          <Entry><Index>#x6040</Index><SubIndex>0</SubIndex><BitLen>16</BitLen><Name>Controlword</Name><DataType>UINT</DataType></Entry>
+          <Entry><Index>#x60FF</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Target velocity</Name><DataType>DINT</DataType></Entry>
+          <Entry><Index>#x6060</Index><SubIndex>0</SubIndex><BitLen>8</BitLen><Name>Modes of operation</Name><DataType>SINT</DataType></Entry>
+          <Entry><Index>#x0</Index><BitLen>8</BitLen></Entry>
+        </RxPdo>
+        <TxPdo Sm="3"><Index>#x1A00</Index><Name>Transmit PDO 1 (CSP)</Name><Exclude>#x1A01</Exclude>
+          <Entry><Index>#x6041</Index><SubIndex>0</SubIndex><BitLen>16</BitLen><Name>Statusword</Name><DataType>UINT</DataType></Entry>
+          <Entry><Index>#x6064</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Position actual value</Name><DataType>DINT</DataType></Entry>
+          <Entry><Index>#x60F4</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Following error actual value</Name><DataType>DINT</DataType></Entry>
+          <Entry><Index>#x60B9</Index><SubIndex>0</SubIndex><BitLen>16</BitLen><Name>Touch probe status</Name><DataType>UINT</DataType></Entry>
+          <Entry><Index>#x60BA</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Touch probe pos1 pos value</Name><DataType>DINT</DataType></Entry>
+        </TxPdo>
+        <TxPdo><Index>#x1A01</Index><Name>Transmit PDO 2 (CSV)</Name><Exclude>#x1A00</Exclude>
+          <Entry><Index>#x6041</Index><SubIndex>0</SubIndex><BitLen>16</BitLen><Name>Statusword</Name><DataType>UINT</DataType></Entry>
+          <Entry><Index>#x6064</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Position actual value</Name><DataType>DINT</DataType></Entry>
+          <Entry><Index>#x606C</Index><SubIndex>0</SubIndex><BitLen>32</BitLen><Name>Velocity actual value</Name><DataType>DINT</DataType></Entry>
+          <Entry><Index>#x6061</Index><SubIndex>0</SubIndex><BitLen>8</BitLen><Name>Modes of operation display</Name><DataType>SINT</DataType></Entry>
+          <Entry><Index>#x0</Index><BitLen>8</BitLen></Entry>
+        </TxPdo>
+        <Mailbox DataLinkLayer="true">
+          <CoE SdoInfo="true" PdoAssign="true" PdoConfig="true" CompleteAccess="true" SegmentedSdo="true">
+            <InitCmd><Transition>PS</Transition><Index>#x6060</Index><SubIndex>0</SubIndex><Data>08</Data><Comment>Modes of operation: CSP</Comment></InitCmd>
+          </CoE>
+          <FoE/>
+          <EoE IP="true" MAC="true"/>
+        </Mailbox>
+        <Dc>
+          <OpMode><Name>DC</Name><Desc>DC-Synchron</Desc><AssignActivate>#x300</AssignActivate><CycleTimeSync0 Factor="1">0</CycleTimeSync0><ShiftTimeSync0>0</ShiftTimeSync0></OpMode>
+          <OpMode><Name>DC01</Name><Desc>DC-Synchron with SYNC1</Desc><AssignActivate>#x700</AssignActivate><CycleTimeSync0 Factor="1">0</CycleTimeSync0><ShiftTimeSync0>0</ShiftTimeSync0><CycleTimeSync1 Factor="1">0</CycleTimeSync1><ShiftTimeSync1>0</ShiftTimeSync1></OpMode>
+          <OpMode><Name>FreeRun</Name><Desc>FreeRun</Desc><AssignActivate>#x0</AssignActivate></OpMode>
+        </Dc>
+        <Eeprom><ByteSize>4096</ByteSize><ConfigData>080E00CC88130000</ConfigData><BootStrap>0010000200140002</BootStrap></Eeprom>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

@@ -1,0 +1,8 @@
+# build output
+/target/
+# packages built by packaging/build-deb.sh
+/dist/
+# pictures from --screenshot test runs
+/shots/
+*.png
+!packaging/*.png

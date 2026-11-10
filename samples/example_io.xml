@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EtherCATInfo Version="1.6">
+  <Vendor>
+    <Id>#x0000E1A0</Id>
+    <Name>Example Automation</Name>
+  </Vendor>
+  <Descriptions>
+    <Groups>
+      <Group><Type>Couplers</Type><Name>Bus Couplers</Name></Group>
+      <Group><Type>DigIn</Type><Name>Digital Input Terminals</Name></Group>
+      <Group><Type>DigOut</Type><Name>Digital Output Terminals</Name></Group>
+      <Group><Type>AnaIn</Type><Name>Analog Input Terminals</Name></Group>
+    </Groups>
+    <Devices>
+      <Device Physics="YY">
+        <Type ProductCode="#x00010001" RevisionNo="#x00010000">BC100</Type>
+        <Name>BC100 EtherCAT Coupler</Name>
+        <GroupType>Couplers</GroupType>
+        <Eeprom><ByteSize>256</ByteSize><ConfigData>0105000000000000</ConfigData></Eeprom>
+      </Device>
+      <Device Physics="EE">
+        <Type ProductCode="#x00020008" RevisionNo="#x00010000">DI8</Type>
+        <Name>DI8 8-Ch. Digital Input 24V DC</Name>
+        <GroupType>DigIn</GroupType>
+        <Fmmu>Inputs</Fmmu>
+        <Sm ControlByte="#x00" StartAddress="#x1000" Enable="1">Inputs</Sm>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A00</Index><Name>Channel 1</Name><Entry><Index>#x6000</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A01</Index><Name>Channel 2</Name><Entry><Index>#x6010</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A02</Index><Name>Channel 3</Name><Entry><Index>#x6020</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A03</Index><Name>Channel 4</Name><Entry><Index>#x6030</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A04</Index><Name>Channel 5</Name><Entry><Index>#x6040</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A05</Index><Name>Channel 6</Name><Entry><Index>#x6050</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A06</Index><Name>Channel 7</Name><Entry><Index>#x6060</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1A07</Index><Name>Channel 8</Name><Entry><Index>#x6070</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Input</Name><DataType>BOOL</DataType></Entry></TxPdo>
+        <Eeprom><ByteSize>256</ByteSize><ConfigData>0105000000000000</ConfigData></Eeprom>
+      </Device>
+      <Device Physics="EE">
+        <Type ProductCode="#x00030008" RevisionNo="#x00010000">DO8</Type>
+        <Name>DO8 8-Ch. Digital Output 24V DC 0.5A</Name>
+        <GroupType>DigOut</GroupType>
+        <Fmmu>Outputs</Fmmu>
+        <Sm ControlByte="#x44" StartAddress="#x0F00" Enable="1">Outputs</Sm>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1600</Index><Name>Channel 1</Name><Entry><Index>#x7000</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1601</Index><Name>Channel 2</Name><Entry><Index>#x7010</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1602</Index><Name>Channel 3</Name><Entry><Index>#x7020</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1603</Index><Name>Channel 4</Name><Entry><Index>#x7030</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1604</Index><Name>Channel 5</Name><Entry><Index>#x7040</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1605</Index><Name>Channel 6</Name><Entry><Index>#x7050</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1606</Index><Name>Channel 7</Name><Entry><Index>#x7060</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <RxPdo Fixed="1" Mandatory="1" Sm="0"><Index>#x1607</Index><Name>Channel 8</Name><Entry><Index>#x7070</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Output</Name><DataType>BOOL</DataType></Entry></RxPdo>
+        <Eeprom><ByteSize>256</ByteSize><ConfigData>0105000000000000</ConfigData></Eeprom>
+      </Device>
+      <Device Physics="EE">
+        <Type ProductCode="#x00040004" RevisionNo="#x00110000">AI4</Type>
+        <Name>AI4 4-Ch. Analog Input +/-10V 16 bit</Name>
+        <GroupType>AnaIn</GroupType>
+        <Fmmu>Outputs</Fmmu>
+        <Fmmu>Inputs</Fmmu>
+        <Fmmu>MBoxState</Fmmu>
+        <Sm MinSize="34" MaxSize="128" DefaultSize="128" StartAddress="#x1000" ControlByte="#x26" Enable="1">MBoxOut</Sm>
+        <Sm MinSize="34" MaxSize="128" DefaultSize="128" StartAddress="#x1080" ControlByte="#x22" Enable="1">MBoxIn</Sm>
+        <Sm StartAddress="#x1100" ControlByte="#x24" Enable="0">Outputs</Sm>
+        <Sm StartAddress="#x1180" ControlByte="#x20" Enable="1">Inputs</Sm>
+        <TxPdo Fixed="1" Mandatory="1" Sm="3"><Index>#x1A00</Index><Name>AI Standard Channel 1</Name><Exclude>#x1A01</Exclude>
+          <Entry><Index>#x6000</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Status__Underrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6000</Index><SubIndex>2</SubIndex><BitLen>1</BitLen><Name>Status__Overrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x0</Index><BitLen>13</BitLen></Entry>
+          <Entry><Index>#x6000</Index><SubIndex>16</SubIndex><BitLen>1</BitLen><Name>Status__TxPDO Toggle</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6000</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1"><Index>#x1A01</Index><Name>AI Compact Channel 1</Name><Exclude>#x1A00</Exclude>
+          <Entry><Index>#x6000</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1" Sm="3"><Index>#x1A02</Index><Name>AI Standard Channel 2</Name><Exclude>#x1A03</Exclude>
+          <Entry><Index>#x6010</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Status__Underrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6010</Index><SubIndex>2</SubIndex><BitLen>1</BitLen><Name>Status__Overrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x0</Index><BitLen>13</BitLen></Entry>
+          <Entry><Index>#x6010</Index><SubIndex>16</SubIndex><BitLen>1</BitLen><Name>Status__TxPDO Toggle</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6010</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1"><Index>#x1A03</Index><Name>AI Compact Channel 2</Name><Exclude>#x1A02</Exclude>
+          <Entry><Index>#x6010</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1" Sm="3"><Index>#x1A04</Index><Name>AI Standard Channel 3</Name><Exclude>#x1A05</Exclude>
+          <Entry><Index>#x6020</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Status__Underrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6020</Index><SubIndex>2</SubIndex><BitLen>1</BitLen><Name>Status__Overrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x0</Index><BitLen>13</BitLen></Entry>
+          <Entry><Index>#x6020</Index><SubIndex>16</SubIndex><BitLen>1</BitLen><Name>Status__TxPDO Toggle</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6020</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1"><Index>#x1A05</Index><Name>AI Compact Channel 3</Name><Exclude>#x1A04</Exclude>
+          <Entry><Index>#x6020</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1" Sm="3"><Index>#x1A06</Index><Name>AI Standard Channel 4</Name><Exclude>#x1A07</Exclude>
+          <Entry><Index>#x6030</Index><SubIndex>1</SubIndex><BitLen>1</BitLen><Name>Status__Underrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6030</Index><SubIndex>2</SubIndex><BitLen>1</BitLen><Name>Status__Overrange</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x0</Index><BitLen>13</BitLen></Entry>
+          <Entry><Index>#x6030</Index><SubIndex>16</SubIndex><BitLen>1</BitLen><Name>Status__TxPDO Toggle</Name><DataType>BOOL</DataType></Entry>
+          <Entry><Index>#x6030</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <TxPdo Fixed="1"><Index>#x1A07</Index><Name>AI Compact Channel 4</Name><Exclude>#x1A06</Exclude>
+          <Entry><Index>#x6030</Index><SubIndex>17</SubIndex><BitLen>16</BitLen><Name>Value</Name><DataType>INT</DataType></Entry>
+        </TxPdo>
+        <Mailbox DataLinkLayer="true">
+          <CoE SdoInfo="true" PdoAssign="true" PdoConfig="false" CompleteAccess="false" SegmentedSdo="true">
+            <InitCmd><Transition>PS</Transition><Index>#x8000</Index><SubIndex>6</SubIndex><Data>01</Data><Comment>Ch.1 enable filter</Comment></InitCmd>
+          </CoE>
+        </Mailbox>
+        <Dc>
+          <OpMode><Name>FreeRun</Name><Desc>FreeRun/SM-Synchron</Desc><AssignActivate>#x0</AssignActivate></OpMode>
+          <OpMode><Name>DcSync</Name><Desc>DC-Synchron (input based)</Desc><AssignActivate>#x700</AssignActivate><CycleTimeSync0 Factor="1">0</CycleTimeSync0><ShiftTimeSync0>0</ShiftTimeSync0><CycleTimeSync1 Factor="0">0</CycleTimeSync1><ShiftTimeSync1>0</ShiftTimeSync1></OpMode>
+        </Dc>
+        <Eeprom><ByteSize>2048</ByteSize><ConfigData>080C00CC88130000</ConfigData></Eeprom>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>
