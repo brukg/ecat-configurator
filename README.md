@@ -33,7 +33,8 @@ ENI network information file (ETG.2100) for your EtherCAT master.
   and the reference clock.
 - **ENI export and import:** all EtherCAT init commands, cyclic frames and the
   process image. Large process images are split over several frames, each with its
-  own expected working counter. Imported files can be edited and exported again.
+  own expected working counter. Several cyclic tasks with different cycle times
+  (e.g. a fast motion task next to slow I/O) each get their own frames. Imported files can be edited and exported again.
 - **Embedded targets:** process image as a C header or CSV, and slave EEPROM (SII)
   images as `.bin` or Intel HEX.
 - **Online:** scan a real bus on Linux and compare it with the configuration, or

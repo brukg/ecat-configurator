@@ -263,6 +263,24 @@ waiting instead of polling each slave. The ENI then contains `Master/MailboxStat
 and a `StatusBitAddr` for each slave's mailbox. Slaves without an `MBoxState` FMMU
 are polled as before, and validation lists how many are covered.
 
+### Several cycle times (tasks)
+
+![Tasks](images/tasks.png)
+
+Everything runs at the master cycle by default. Under *Further cyclic tasks*
+(General page) add tasks with their own name and cycle time, then choose the
+**Cyclic task** on each slave's General page. With more than one task, the tree
+shows `[T1]`, `[T2]`… after each slave.
+
+Every task gets its own logical area (its outputs, then its inputs, placed after
+the previous task's area), its own frames and expected working counters, and its
+own `<Cyclic>` block in the ENI with the task's cycle time. The AL-status read and
+mailbox states stay in task 1. DC SYNC0/SYNC1 cycles of a slave follow its task's
+cycle. *Cyclic Frames* groups the frames by task and shows the total bus load;
+validation warns about tasks without slaves and a bus load above 50%. The C header
+gets `ECAT_TASKn_CYCLE_US` with each task's image range. Importing an ENI with
+several `<Cyclic>` blocks restores the tasks and the slaves' assignment.
+
 ### Large process images
 
 ![Cyclic frames](images/frames.png)
@@ -388,7 +406,5 @@ the configuration when you have not scanned):
 
 ## Known limitations
 
-- All process data runs at one cycle time; separate tasks with different cycle
-  times are not supported yet.
 - Hot-connect groups and redundancy are not configured.
 - The live bus scan is available on Linux only.

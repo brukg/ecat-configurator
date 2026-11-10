@@ -13,8 +13,8 @@ whether a generated ENI works on real hardware at all.
    layout, init-command set, DC fields).
 3. ~~**Large process images.**~~ Done in 0.3: process data split over several
    frames and commands, with per-command working counters, wire time and bus
-   load check, and ENI round trip. Still open: several cyclic tasks with
-   different cycle times.
+   load check, and ENI round trip. ~~Several cyclic tasks with different cycle
+   times~~ done in 0.14.
 4. **Complete ESI support.** ~~Object dictionary~~ done in 0.4: dictionary
    page, start-up values and PDO entries picked by name, typed values, checks
    against access and size. Still open: `AlternativeSmMapping`, multi-channel
