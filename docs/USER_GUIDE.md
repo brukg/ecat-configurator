@@ -131,7 +131,8 @@ multi-axis drives.
 - **PDO entries:** click a PDO name to see its entries. PDOs marked ✏ have an
   editable mapping when the device supports CoE PDO configuration: change index,
   subindex, bit length, name or data type, reorder or delete entries, add gaps, or
-  create a *New PDO*.
+  create a *New PDO*. With an object dictionary, **From dictionary…** adds an
+  entry that may be mapped in this direction, with the right size and type.
 - *Download PDO assignment/mapping at start-up* generates the CoE commands
   (0x1C12/0x1C13 and 0x16xx/0x1Axx). If the device has no CoE PDO assignment, the
   assignment is fixed and changing it raises a validation warning.
@@ -150,6 +151,24 @@ Shows the mailbox protocols and the mailbox sizes (within the ESI limits), and t
 - *user* rows are your own. Fill in transition, index (hex), subindex and data
   (hex bytes, little-endian, e.g. `e8 03` for 1000), then press **Add**. Use ✏ to
   edit a row and ⬆/⬇ to reorder.
+- With an object dictionary, pick the **Object** from the list (searchable) and type
+  the **Value** as a number or text. It is converted to the object's type, and the
+  resulting bytes are shown next to it. Rows show the object name and the
+  decoded value, e.g. `6081:00 Profile velocity · 10000 (10 27 00 00)`.
+
+![Start-up value from the dictionary](images/startup-value.png)
+
+### Object Dictionary
+![Object dictionary](images/dictionary.png)
+
+Shown when the ESI contains a CoE dictionary (`Profile/Dictionary`). It lists
+every object and subindex with type, bit size, access (ro/rw/wo), PDO mapping
+(R = RxPDO, T = TxPDO) and default value. Records and arrays are expanded into
+their entries. Use the filter box to search by index or name.
+
+**Set at start-up…** next to a writable entry opens *Mailbox / CoE* with the
+command form already filled in (index, subindex, name and default value).
+Change the value and press **Add**.
 
 ### Distributed Clocks
 Choose the operation mode (from the ESI), make the slave the reference clock, and
@@ -207,7 +226,9 @@ The *Validation* tab checks the active configuration all the time. It looks for:
 - frames that need more than half of the cycle time on a 100 Mbit/s wire (it also
   reports, as information, when the process data is split over several frames);
 - DC problems: a mode set while DC is off, a SYNC0 cycle of 0, or a reference
-  clock without DC support.
+  clock without DC support;
+- start-up commands that write read-only objects, objects or subindices that are
+  not in the dictionary, or data of the wrong size for the object's type.
 
 Errors are marked ❌ and warnings ⚠, also in the tree. Click a message to select
 the device. Exporting with errors is possible, but you get a warning first.

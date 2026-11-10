@@ -15,10 +15,11 @@ whether a generated ENI works on real hardware at all.
    frames and commands, with per-command working counters, wire time and bus
    load check, and ENI round trip. Still open: several cyclic tasks with
    different cycle times.
-4. **Complete ESI support.** Object dictionary (`Dictionary` / `DataTypes`), so
-   CoE parameters can be picked by name and type instead of typed in hex.
-   `AlternativeSmMapping`, multi-channel profiles (e.g. several CiA 402 axes),
-   and all InitCmd variants.
+4. **Complete ESI support.** ~~Object dictionary~~ done in 0.4: dictionary
+   page, start-up values and PDO entries picked by name, typed values, checks
+   against access and size. Still open: `AlternativeSmMapping`, multi-channel
+   profiles (e.g. several CiA 402 axes), external dictionary files and all
+   InitCmd variants.
 5. **Online commissioning.** Switch slave states (INIT/PREOP/SAFEOP/OP), browse
    and edit the object dictionary over SDO, read and write slave EEPROM, show AL
    status codes and error counters, and measure DC propagation delays.

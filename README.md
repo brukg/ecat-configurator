@@ -20,6 +20,9 @@ ENI network information file (ETG.2100) for your EtherCAT master.
   editable PDO mapping, and a live process image with byte/bit offsets.
 - **CoE start-up commands:** generated PDO assignment/mapping SDOs plus your own
   SDO downloads per state transition.
+- **Object dictionary:** read from the ESI. Pick start-up parameters and PDO entries
+  by name, type values as numbers instead of hex, and get warnings for read-only
+  objects, wrong sizes or unknown objects.
 - **Distributed clocks:** operation modes, SYNC0/SYNC1 cycle and shift times,
   and the reference clock.
 - **ENI export and import:** all EtherCAT init commands, cyclic frames and the
