@@ -74,10 +74,20 @@ from source.
 
 ### Windows and macOS
 
-Every push is built and tested on Linux, Windows and macOS. Ready-made programs
-(and the Debian package) can be downloaded from the latest successful
+Every push is built and tested on Linux, Windows and macOS. Ready-made packages
+can be downloaded from the latest successful
 [CI run](https://github.com/brukg/ecat-configurator/actions/workflows/ci.yml)
-under *Artifacts*. The live bus scan is only available on Linux; everything
+under *Artifacts*:
+
+- **package-Windows**: `EtherCAT-Configurator-<version>-windows.zip`. Unzip it and
+  start `ecat-configurator.exe`; samples and the user guide are included.
+- **package-macOS**: `EtherCAT-Configurator-<version>-macos.zip` with
+  *EtherCAT Configurator.app*. It is not signed, so open it the first time with
+  right-click › *Open*.
+- **package-Linux**: the Debian package.
+
+The packages are built by `packaging/build-deb.sh`, `packaging/build-macos-app.sh`
+and `packaging/build-windows-zip.sh`. The live bus scan is only available on Linux; everything
 else works the same on all three systems.
 
 ### Build from source
