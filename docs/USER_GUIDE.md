@@ -244,7 +244,7 @@ The raw bytes written to the sync manager (0x0800+) and FMMU (0x0600+) registers
 
 | Page | Contents |
 |------|----------|
-| General | name, network adapter, source/destination MAC, EtherType, cycle time, LRW or LRD+LWR, logical start address, frame size limit, state machine timeouts, image summary |
+| General | name, network adapter, source/destination MAC, EtherType, cycle time, LRW or LRD+LWR, logical start address, frame size limit, mailbox state polling, state machine timeouts, image summary |
 | Distributed Clocks | enable DC, choose the reference clock, overview of all DC slaves |
 | Process Image | every input and output variable with offsets; export as C header or CSV |
 | Cyclic Frames | every cyclic frame with its commands (address, length, expected working counter, image offsets), frame usage, wire time and bus load, logical address map |
@@ -252,6 +252,16 @@ The raw bytes written to the sync manager (0x0800+) and FMMU (0x0600+) registers
 | Topology | diagram of the network; click a device to select it |
 | Online / Scan | scan the bus and compare it with the configuration |
 | ENI Preview | the ENI exactly as it will be exported; copy or export it |
+
+### Mailbox state polling
+
+With *Mailbox state polling* (General page) every slave whose ESI lists an
+`MBoxState` FMMU gets an extra FMMU that maps its "mailbox in full" bit (register
+0x080D, bit 3) into a small logical area (default `0x09000000`). One LRD reads all
+these bits every cycle, so the master only fetches mailboxes that have an answer
+waiting instead of polling each slave. The ENI then contains `Master/MailboxStates`
+and a `StatusBitAddr` for each slave's mailbox. Slaves without an `MBoxState` FMMU
+are polled as before, and validation lists how many are covered.
 
 ### Large process images
 
