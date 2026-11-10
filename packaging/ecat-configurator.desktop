@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=EtherCAT Configurator
+GenericName=EtherCAT Network Configurator
+Comment=Create and edit EtherCAT ENI network files from ESI device descriptions
+Exec=ecat-configurator %F
+Icon=ecat-configurator
+Terminal=false
+Categories=Development;Engineering;
+Keywords=EtherCAT;ENI;ESI;fieldbus;PDO;
+MimeType=application/xml;text/xml;
+StartupWMClass=ecat-configurator
