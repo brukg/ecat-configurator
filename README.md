@@ -145,7 +145,7 @@ cargo build            # must build without warnings
 | `packaging/` | Debian packaging |
 | `docs/` | user guide and screenshots |
 
-Bug reports and pull requests are welcome. Please include the ESI/ENI file
+Planned work is listed in [ROADMAP.md](ROADMAP.md). Bug reports and pull requests are welcome. Please include the ESI/ENI file
 (or a reduced version of it) that shows the problem.
 
 ## License
