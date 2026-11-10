@@ -38,7 +38,9 @@ ENI network information file (ETG.2100) for your EtherCAT master.
 
 ### Debian / Ubuntu package
 
-Download the `.deb` from the [Releases](https://github.com/brukg/ecat-configurator/releases) page and install it:
+Download the `.deb` from the [Releases](https://github.com/brukg/ecat-configurator/releases)
+page, or build it yourself from a clone with `packaging/build-deb.sh` (see
+[Building the Debian package](#building-the-debian-package)). Then install it:
 
 ```sh
 sudo apt install ./ecat-configurator_0.1.0_amd64.deb
