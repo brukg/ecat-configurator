@@ -228,6 +228,49 @@ pub fn next_uid() -> u64 {
     UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Rebuild the wiring from a bus scan: `open[i]` are the downstream ports (1=B, 2=C, 3=D)
+/// on which slave i (in scan order) has communication. Returns (parent, port) per slave.
+pub fn topology_from_ports(open: &[Vec<u8>]) -> Vec<(Option<usize>, u8)> {
+    let rank = |p: u8| match p {
+        3 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 3,
+    };
+    let mut stack: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut out = Vec::with_capacity(open.len());
+    for (i, ports) in open.iter().enumerate() {
+        let link = if i == 0 {
+            (None, 1)
+        } else {
+            match stack.last_mut() {
+                Some((p, rest)) => {
+                    let parent = *p;
+                    let port = rest.remove(0);
+                    if rest.is_empty() {
+                        stack.pop();
+                    }
+                    (Some(parent), port)
+                }
+                None => (Some(i - 1), 1),
+            }
+        };
+        out.push(link);
+        let mut down: Vec<u8> = ports.iter().copied().filter(|p| (1..=3).contains(p)).collect();
+        down.sort_by_key(|p| rank(*p));
+        down.dedup();
+        if !down.is_empty() {
+            stack.push((i, down));
+        }
+    }
+    out
+}
+
+/// Downstream ports with communication, from the DL status register (0x0110).
+pub fn open_ports_from_dl_status(dl: u16) -> Vec<u8> {
+    (1u8..=3).filter(|p| dl & (1 << (9 + 2 * *p as u16)) != 0).collect()
+}
+
 pub fn port_letter(p: u8) -> char {
     (b'A' + p.min(3)) as char
 }
@@ -458,6 +501,71 @@ impl Project {
         }
         self.slaves.swap(i, i + 1);
         self.relinearize();
+    }
+
+    /// Order in which an EtherCAT frame reaches the slaves: depth first from the
+    /// master, and on every device through its ports in the order D, B, C.
+    pub fn bus_order(&self) -> Vec<usize> {
+        fn rank(port: u8) -> u8 {
+            match port {
+                3 => 0,
+                1 => 1,
+                2 => 2,
+                _ => 3,
+            }
+        }
+        let n = self.slaves.len();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
+        for (i, s) in self.slaves.iter().enumerate() {
+            let p = match s.parent {
+                Some(p) if p < n && p != i => p + 1,
+                _ => 0,
+            };
+            children[p].push(i);
+        }
+        for c in children.iter_mut() {
+            c.sort_by_key(|&i| (rank(self.slaves[i].parent_port), i));
+        }
+        let mut out = Vec::with_capacity(n);
+        let mut seen = vec![false; n];
+        let mut stack: Vec<usize> = children[0].iter().rev().copied().collect();
+        while let Some(i) = stack.pop() {
+            if seen[i] {
+                continue;
+            }
+            seen[i] = true;
+            out.push(i);
+            for &c in children[i + 1].iter().rev() {
+                stack.push(c);
+            }
+        }
+        // anything unreachable (a loop in the parent links) keeps its list position at the end
+        out.extend((0..n).filter(|i| !seen[*i]));
+        out
+    }
+
+    /// Reorder the slave list to the bus order, so auto-increment addresses match the wiring.
+    /// Returns true when the order changed.
+    pub fn sort_by_topology(&mut self) -> bool {
+        let order = self.bus_order();
+        if order.iter().enumerate().all(|(k, &i)| k == i) {
+            return false;
+        }
+        let mut new_index = vec![0usize; order.len()];
+        for (k, &i) in order.iter().enumerate() {
+            new_index[i] = k;
+        }
+        let old = std::mem::take(&mut self.slaves);
+        let mut slots: Vec<Option<SlaveCfg>> = old.into_iter().map(Some).collect();
+        for &i in order.iter() {
+            let mut s = slots[i].take().expect("each slave once");
+            s.parent = s.parent.map(|p| new_index[p]);
+            self.slaves.push(s);
+        }
+        if let Some(r) = self.master.ref_clock {
+            self.master.ref_clock = new_index.get(r).copied();
+        }
+        true
     }
 
     pub fn relinearize(&mut self) {
@@ -1241,6 +1349,14 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
             ),
         );
     }
+    if p.bus_order().iter().enumerate().any(|(k, &i)| k != i) {
+        push(
+            Severity::Error,
+            None,
+            "The slave list does not follow the wiring (ports D, B, C), so auto-increment addresses would be wrong. Use Network › Sort slaves by wiring."
+                .into(),
+        );
+    }
     for (i, s) in p.slaves.iter().enumerate() {
         if s.phys_addr == 0 {
             push(Severity::Error, Some(i), format!("{}: station address 0 is not allowed.", s.name));
@@ -1261,7 +1377,22 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
                     Some(i),
                     format!("{}: upstream device must come before it in the list.", s.name),
                 );
-            } else if s.parent_port as usize >= p.slaves[par].device.port_count() {
+            } else if let Some(j) = p.slaves.iter().position(|o| o.parent == Some(par) && o.parent_port == s.parent_port) {
+                if j < i {
+                    push(
+                        Severity::Error,
+                        Some(i),
+                        format!(
+                            "{}: port {} of {} is already used by {}.",
+                            s.name,
+                            port_letter(s.parent_port),
+                            p.slaves[par].name,
+                            p.slaves[j].name
+                        ),
+                    );
+                }
+            }
+            if par < i && s.parent_port as usize >= p.slaves[par].device.port_count() {
                 push(
                     Severity::Warning,
                     Some(i),
@@ -1501,6 +1632,41 @@ mod tests {
         lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
         lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
         lib
+    }
+
+    #[test]
+    fn bus_order_follows_ports_d_b_c() {
+        let mut p = demo_project(&demo_lib());
+        let uids: Vec<u64> = p.slaves.iter().map(|s| s.uid).collect();
+        // hang slave 4 (and with it 5 and 6) on port D of slave 0: D is served before B
+        p.slaves[4].parent = Some(0);
+        p.slaves[4].parent_port = 3;
+        assert_eq!(p.bus_order(), vec![0, 4, 5, 6, 1, 2, 3]);
+        let lay = compute_layout(&p);
+        assert!(validate(&p, &lay).iter().any(|x| x.text.contains("does not follow the wiring")));
+        assert!(p.sort_by_topology());
+        let now: Vec<u64> = p.slaves.iter().map(|s| s.uid).collect();
+        assert_eq!(now, vec![uids[0], uids[4], uids[5], uids[6], uids[1], uids[2], uids[3]]);
+        assert_eq!(p.slaves[1].parent, Some(0));
+        assert_eq!(p.slaves[4].parent, Some(0)); // former slave 1, still on port B of slave 0
+        assert_eq!(p.slaves[2].parent, Some(1));
+        assert_eq!(p.bus_order(), (0..7).collect::<Vec<_>>());
+        assert!(!p.sort_by_topology());
+        let lay = compute_layout(&p);
+        assert!(!validate(&p, &lay).iter().any(|x| x.sev == Severity::Error));
+        // two slaves on the same port
+        p.slaves[4].parent_port = 3;
+        let lay = compute_layout(&p);
+        assert!(validate(&p, &lay).iter().any(|x| x.text.contains("already used")));
+    }
+
+    #[test]
+    fn wiring_rebuilt_from_scanned_ports() {
+        // 0: coupler with B and D used; 1: on D, end of branch; 2: on B of 0, forwards on B; 3: end
+        let open = vec![vec![1, 3], vec![], vec![1], vec![]];
+        let t = topology_from_ports(&open);
+        assert_eq!(t, vec![(None, 1), (Some(0), 3), (Some(0), 1), (Some(2), 1)]);
+        assert_eq!(open_ports_from_dl_status(1 << 11 | 1 << 15), vec![1, 3]);
     }
 
     #[test]

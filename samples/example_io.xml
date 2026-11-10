@@ -12,9 +12,9 @@
       <Group><Type>AnaIn</Type><Name>Analog Input Terminals</Name></Group>
     </Groups>
     <Devices>
-      <Device Physics="YY">
+      <Device Physics="YYYY">
         <Type ProductCode="#x00010001" RevisionNo="#x00010000">BC100</Type>
-        <Name>BC100 EtherCAT Coupler</Name>
+        <Name>BC100 EtherCAT Coupler (2 extension ports)</Name>
         <GroupType>Couplers</GroupType>
         <Eeprom><ByteSize>256</ByteSize><ConfigData>0105000000000000</ConfigData></Eeprom>
       </Device>

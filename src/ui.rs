@@ -139,6 +139,7 @@ enum Place {
 
 /// Changes that alter the slave list are applied between frames, never while views draw.
 enum Deferred {
+    SortTopology,
     AddDevice(usize),
     ConfigFromScan,
 }
@@ -1144,7 +1145,18 @@ impl App {
             let i = p.add_device(&dev, at);
             p.slaves[i].serial = s.serial;
         }
-        p.relinearize();
+        // wiring from the ports each slave communicates on (DL status 0x0110)
+        let open: Vec<Vec<u8>> = scanned.iter().map(|s| open_ports_from_dl_status(s.dl_status)).collect();
+        if open.iter().any(|o| !o.is_empty()) {
+            for (k, (parent, port)) in topology_from_ports(&open).into_iter().enumerate() {
+                if let Some(s) = p.slaves.get_mut(k) {
+                    s.parent = parent;
+                    s.parent_port = port;
+                }
+            }
+        } else {
+            p.relinearize();
+        }
         let name = self.unique_name("Scanned network");
         self.add_document(name.clone(), p, None, true);
         self.info(&format!("Configuration created from scanned bus as document \"{}\"", name));
@@ -1325,6 +1337,25 @@ impl App {
                     self.dirty = true;
                     self.changed = true;
                     self.info("Station addresses renumbered");
+                }
+                if ui.button("Sort slaves by wiring (ports D, B, C)").clicked() {
+                    ui.close_menu();
+                    let uid = if let Sel::Slave(i) = self.sel {
+                        self.project.slaves.get(i).map(|s| s.uid)
+                    } else {
+                        None
+                    };
+                    if self.project.sort_by_topology() {
+                        if let Some(k) = uid.and_then(|u| self.project.index_of_uid(u)) {
+                            self.sel = Sel::Slave(k);
+                            self.last_sel = self.sel;
+                        }
+                        self.dirty = true;
+                        self.changed = true;
+                        self.info("Slaves sorted into bus order");
+                    } else {
+                        self.info("The slave list already follows the wiring");
+                    }
                 }
                 if ui.button("Make topology linear").clicked() {
                     ui.close_menu();
@@ -2071,6 +2102,12 @@ impl App {
                     }
                 }
                 Deferred::ConfigFromScan => self.config_from_scan(),
+                Deferred::SortTopology => {
+                    if self.project.sort_by_topology() {
+                        self.resync_selection();
+                        self.info("Slave list re-sorted to follow the wiring (ports D, B, C)");
+                    }
+                }
             }
         }
         for (t, p) in std::mem::take(&mut self.open_requests) {
@@ -3127,6 +3164,7 @@ impl App {
     }
 
     fn slave_general(&mut self, ui: &mut egui::Ui, i: usize) {
+        let wiring_before = (self.project.slaves[i].parent, self.project.slaves[i].parent_port);
         let names: Vec<(u16, String, usize)> = self
             .project
             .slaves
@@ -3228,6 +3266,10 @@ impl App {
                 ],
             );
         });
+        if (self.project.slaves[i].parent, self.project.slaves[i].parent_port) != wiring_before {
+            // keep the list in bus order; done between frames so open views stay on their items
+            self.deferred.push(Deferred::SortTopology);
+        }
         if changed {
             self.dirty = true;
             self.changed = true;
