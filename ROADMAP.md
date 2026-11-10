@@ -35,5 +35,6 @@ whether a generated ENI works on real hardware at all.
    cut/copy/paste/duplicate of slaves with all their settings (also between
    documents and program instances). Still open: copying only a PDO mapping or
    start-up list to several slaves at once.
-10. **Cross-platform.** Windows and macOS builds and packages, and a bus scan via
-    Npcap/BPF. CI that builds, tests and packages every commit.
+10. **Cross-platform.** ~~Windows and macOS builds, and CI that builds, tests
+    and packages every commit~~ done in 0.8. Still open: installers for Windows
+    and macOS, and a bus scan via Npcap (Windows) and BPF (macOS).

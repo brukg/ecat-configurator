@@ -1,5 +1,7 @@
 # EtherCAT Configurator
 
+[![CI](https://github.com/brukg/ecat-configurator/actions/workflows/ci.yml/badge.svg)](https://github.com/brukg/ecat-configurator/actions/workflows/ci.yml)
+
 A desktop tool for building EtherCAT® network configurations. Load the ESI device
 description files (ETG.2000) from your device vendors, assemble the network,
 adjust process data, start-up parameters and distributed clocks, and export an
@@ -64,10 +66,18 @@ Start **EtherCAT Configurator** from the application menu, or run
 so it needs Ubuntu 24.04 or newer or Debian 13 or newer. On older systems, build
 from source.
 
+### Windows and macOS
+
+Every push is built and tested on Linux, Windows and macOS. Ready-made programs
+(and the Debian package) can be downloaded from the latest successful
+[CI run](https://github.com/brukg/ecat-configurator/actions/workflows/ci.yml)
+under *Artifacts*. The live bus scan is only available on Linux; everything
+else works the same on all three systems.
+
 ### Build from source
 
-You need [Rust](https://rustup.rs) (stable) and, on Linux, the GTK 3 development
-files for the file dialogs:
+You need [Rust](https://rustup.rs) (stable). Windows and macOS need nothing else.
+On Linux, also install the GTK 3 development files for the file dialogs:
 
 ```sh
 sudo apt install build-essential libgtk-3-dev libxkbcommon-dev   # Debian/Ubuntu
