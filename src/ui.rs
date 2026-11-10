@@ -1162,7 +1162,12 @@ impl App {
                         }
                         Ok(Reply::Written(n)) => self.info(&format!("Online: wrote {} EEPROM bytes; power-cycle the slave to load them", n)),
                         Ok(Reply::Sdo(d)) => {
-                            self.online.sdo_result = bytes_to_hex_spaced(&d);
+                            let text = if d.len() > 4 && d.iter().all(|c| (32..127).contains(c) || *c == 0) {
+                                format!("  \"{}\"", String::from_utf8_lossy(&d).trim_end_matches('\0'))
+                            } else {
+                                String::new()
+                            };
+                            self.online.sdo_result = format!("{}{}", bytes_to_hex_spaced(&d), text);
                             self.info(&format!("Online: SDO read {}", self.online.sdo_result));
                         }
                         Ok(Reply::FoeWritten(n)) => self.info(&format!("Online: firmware of {} bytes downloaded; restart the slave", n)),

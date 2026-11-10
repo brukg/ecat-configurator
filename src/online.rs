@@ -247,15 +247,25 @@ pub fn sdo_download_request(counter: u8, index: u16, sub: u8, data: &[u8]) -> Ve
     mailbox(counter, &p)
 }
 
-/// Parse an SDO response mailbox. Ok(data) for uploads, Ok(empty) for download confirmations.
-pub fn parse_sdo_response(m: &[u8]) -> Result<Vec<u8>, String> {
+/// Answer to an SDO initiate request.
+#[derive(Debug, PartialEq)]
+pub enum SdoInit {
+    /// Complete upload data.
+    Data(Vec<u8>),
+    /// Upload continues with segments: total size and the part received so far.
+    More { total: usize, data: Vec<u8> },
+    /// Download confirmed.
+    Done,
+}
+
+fn coe_check(m: &[u8]) -> Result<(usize, u8), String> {
     if m.len() < 16 {
         return Err("mailbox response too short".into());
     }
-    let len = u16::from_le_bytes([m[0], m[1]]) as usize;
     if m[5] & 0x0F != MBX_COE {
         return Err(format!("unexpected mailbox type {}", m[5] & 0x0F));
     }
+    let len = (u16::from_le_bytes([m[0], m[1]]) as usize).min(m.len() - 6);
     let svc = u16::from_le_bytes([m[6], m[7]]) >> 12;
     let b0 = m[8];
     if b0 == 0x80 {
@@ -265,27 +275,99 @@ pub fn parse_sdo_response(m: &[u8]) -> Result<Vec<u8>, String> {
     if svc != 3 {
         return Err(format!("unexpected CoE service {}", svc));
     }
+    Ok((len, b0))
+}
+
+pub fn parse_sdo_init(m: &[u8]) -> Result<SdoInit, String> {
+    let (len, b0) = coe_check(m)?;
     match b0 >> 5 {
         2 => {
-            // upload response
             if b0 & 0x02 != 0 {
                 let n = if b0 & 0x01 != 0 { 4 - ((b0 >> 2) & 3) as usize } else { 4 };
-                Ok(m[12..12 + n].to_vec())
+                Ok(SdoInit::Data(m[12..12 + n].to_vec()))
             } else {
-                let size = u32::from_le_bytes([m[12], m[13], m[14], m[15]]) as usize;
-                let avail = len.saturating_sub(10).min(m.len().saturating_sub(16));
-                if size > avail {
-                    return Err(format!(
-                        "object is {} bytes; segmented transfer is not supported yet ({} received)",
-                        size, avail
-                    ));
+                let total = u32::from_le_bytes([m[12], m[13], m[14], m[15]]) as usize;
+                let avail = len.saturating_sub(10);
+                let part = m[16..16 + avail.min(total)].to_vec();
+                if part.len() >= total {
+                    Ok(SdoInit::Data(part))
+                } else {
+                    Ok(SdoInit::More { total, data: part })
                 }
-                Ok(m[16..16 + size].to_vec())
             }
         }
-        3 => Ok(vec![]), // download response
+        3 => Ok(SdoInit::Done),
         _ => Err(format!("unexpected SDO response {:#04x}", b0)),
     }
+}
+
+/// Parse an SDO response mailbox. Ok(data) for uploads, Ok(empty) for download confirmations.
+pub fn parse_sdo_response(m: &[u8]) -> Result<Vec<u8>, String> {
+    match parse_sdo_init(m)? {
+        SdoInit::Data(d) => Ok(d),
+        SdoInit::Done => Ok(vec![]),
+        SdoInit::More { total, data } => Err(format!("object is {} bytes, {} received; needs a segmented upload", total, data.len())),
+    }
+}
+
+/// Upload segment request with the toggle bit.
+pub fn sdo_upload_segment_request(counter: u8, toggle: bool) -> Vec<u8> {
+    let mut p = vec![0x60 | ((toggle as u8) << 4)];
+    p.extend_from_slice(&[0; 7]);
+    mailbox(counter, &p)
+}
+
+/// Upload segment response: (data, last segment).
+pub fn parse_upload_segment(m: &[u8], toggle: bool) -> Result<(Vec<u8>, bool), String> {
+    let (len, b0) = coe_check(m)?;
+    if b0 >> 5 != 0 {
+        return Err(format!("unexpected upload segment response {:#04x}", b0));
+    }
+    if (b0 & 0x10 != 0) != toggle {
+        return Err("toggle bit mismatch in upload segment".into());
+    }
+    let last = b0 & 0x01 != 0;
+    let data = if len > 10 {
+        m[9..6 + len].to_vec()
+    } else {
+        let unused = ((b0 >> 1) & 7) as usize;
+        m[9..9 + 7 - unused].to_vec()
+    };
+    Ok((data, last))
+}
+
+/// First message of a segmented download: total size and the first part of the data.
+pub fn sdo_download_initiate(counter: u8, index: u16, sub: u8, total: u32, first: &[u8]) -> Vec<u8> {
+    let mut p = vec![0x21];
+    p.extend_from_slice(&index.to_le_bytes());
+    p.push(sub);
+    p.extend_from_slice(&total.to_le_bytes());
+    p.extend_from_slice(first);
+    mailbox(counter, &p)
+}
+
+/// Download segment with the toggle bit; segments shorter than 7 bytes are padded.
+pub fn sdo_download_segment(counter: u8, toggle: bool, data: &[u8], last: bool) -> Vec<u8> {
+    let mut b0 = ((toggle as u8) << 4) | (last as u8);
+    let mut d = data.to_vec();
+    if d.len() < 7 {
+        b0 |= ((7 - d.len()) as u8) << 1;
+        d.resize(7, 0);
+    }
+    let mut p = vec![b0];
+    p.extend_from_slice(&d);
+    mailbox(counter, &p)
+}
+
+pub fn parse_download_segment_resp(m: &[u8], toggle: bool) -> Result<(), String> {
+    let (_, b0) = coe_check(m)?;
+    if b0 >> 5 != 1 {
+        return Err(format!("unexpected download segment response {:#04x}", b0));
+    }
+    if (b0 & 0x10 != 0) != toggle {
+        return Err("toggle bit mismatch in download segment".into());
+    }
+    Ok(())
 }
 
 pub fn start(adapter: String, pos: u16, req: Request) -> Receiver<OnlineMsg> {
@@ -505,36 +587,72 @@ fn run(adapter: &str, pos: u16, req: Request, tx: &std::sync::mpsc::Sender<Onlin
             if st[0] & 0x08 != 0 {
                 let _ = rd(&mut s, in_start, in_len as usize)?;
             }
-            let mut m = match &req {
-                Request::SdoUpload { index, sub } => sdo_upload_request(1, *index, *sub),
-                Request::SdoDownload { index, sub, data } => sdo_download_request(1, *index, *sub, data),
-                _ => unreachable!(),
+            let mut counter = 0u8;
+            let mut xchg = |s: &mut Sock, mut m: Vec<u8>| -> Result<Vec<u8>, String> {
+                counter = if counter >= 7 { 1 } else { counter + 1 };
+                m[5] = (m[5] & 0x0F) | (counter << 4);
+                if m.len() > out_len as usize {
+                    return Err(format!("message of {} bytes does not fit the {}-byte mailbox", m.len(), out_len));
+                }
+                m.resize(out_len as usize, 0);
+                wr(s, out_start, &m)?;
+                let t = Instant::now();
+                loop {
+                    let st = rd(s, 0x080D, 1)?;
+                    if st[0] & 0x08 != 0 {
+                        break;
+                    }
+                    if t.elapsed() > Duration::from_secs(3) {
+                        return Err("no SDO answer from the slave (timeout)".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                rd(s, in_start, in_len as usize)
             };
-            if m.len() > out_len as usize {
-                return Err(format!(
-                    "value too large for the mailbox ({} bytes); segmented transfer is not supported yet",
-                    m.len()
-                ));
-            }
-            m.resize(out_len as usize, 0);
-            wr(&mut s, out_start, &m)?;
-            let t = Instant::now();
-            loop {
-                let st = rd(&mut s, 0x080D, 1)?;
-                if st[0] & 0x08 != 0 {
-                    break;
+            match req {
+                Request::SdoUpload { index, sub } => {
+                    let first = xchg(&mut s, sdo_upload_request(0, index, sub))?;
+                    match parse_sdo_init(&first)? {
+                        SdoInit::Data(d) => Ok(Reply::Sdo(d)),
+                        SdoInit::Done => Ok(Reply::Sdo(vec![])),
+                        SdoInit::More { total, mut data } => {
+                            let mut toggle = false;
+                            loop {
+                                let r = xchg(&mut s, sdo_upload_segment_request(0, toggle))?;
+                                let (d, last) = parse_upload_segment(&r, toggle)?;
+                                data.extend_from_slice(&d);
+                                if last || data.len() >= total {
+                                    break;
+                                }
+                                toggle = !toggle;
+                            }
+                            data.truncate(total);
+                            Ok(Reply::Sdo(data))
+                        }
+                    }
                 }
-                if t.elapsed() > Duration::from_secs(3) {
-                    return Err("no SDO answer from the slave (timeout)".into());
+                Request::SdoDownload { index, sub, data } => {
+                    let single = sdo_download_request(0, index, sub, &data);
+                    if single.len() <= out_len as usize {
+                        parse_sdo_response(&xchg(&mut s, single)?)?;
+                        return Ok(Reply::SdoWritten);
+                    }
+                    let first_len = (out_len as usize).saturating_sub(16);
+                    let seg_len = (out_len as usize).saturating_sub(9).max(7);
+                    let (first, mut rest) = data.split_at(first_len.min(data.len()));
+                    parse_sdo_response(&xchg(&mut s, sdo_download_initiate(0, index, sub, data.len() as u32, first))?)?;
+                    let mut toggle = false;
+                    while !rest.is_empty() {
+                        let (part, r) = rest.split_at(seg_len.min(rest.len()));
+                        rest = r;
+                        let resp = xchg(&mut s, sdo_download_segment(0, toggle, part, rest.is_empty()))?;
+                        parse_download_segment_resp(&resp, toggle)?;
+                        toggle = !toggle;
+                    }
+                    Ok(Reply::SdoWritten)
                 }
-                std::thread::sleep(Duration::from_millis(2));
+                _ => unreachable!(),
             }
-            let resp = rd(&mut s, in_start, in_len as usize)?;
-            let data = parse_sdo_response(&resp)?;
-            Ok(match req {
-                Request::SdoUpload { .. } => Reply::Sdo(data),
-                _ => Reply::SdoWritten,
-            })
         }
     }
 }
@@ -566,6 +684,34 @@ mod tests {
         resp = vec![10, 0, 0, 0, 0, 0x13, 0x00, 0x30, 0x60, 0x81, 0x60, 0x00, 0, 0, 0, 0];
         assert!(parse_sdo_response(&resp).unwrap().is_empty());
         assert_eq!(al_code_text(0x001B), "sync manager watchdog");
+        // segmented upload: initiate answer with 20 of 30 bytes, then a last segment of 10
+        let mut init = vec![30, 0, 0, 0, 0, 0x13, 0x00, 0x30, 0x41, 0x08, 0x10, 0x00, 30, 0, 0, 0];
+        init.extend((0u8..20).collect::<Vec<_>>());
+        assert_eq!(
+            parse_sdo_init(&init).unwrap(),
+            SdoInit::More {
+                total: 30,
+                data: (0u8..20).collect()
+            }
+        );
+        assert_eq!(sdo_upload_segment_request(1, true)[8], 0x70);
+        let mut seg = vec![13, 0, 0, 0, 0, 0x13, 0x00, 0x30, 0x01];
+        seg.extend((20u8..30).collect::<Vec<_>>());
+        seg.resize(32, 0);
+        assert_eq!(parse_upload_segment(&seg, false).unwrap(), ((20u8..30).collect(), true));
+        assert!(parse_upload_segment(&seg, true).is_err());
+        // short segment (3 bytes in the 7-byte area)
+        let short = vec![10, 0, 0, 0, 0, 0x13, 0x00, 0x30, 0x10 | (4 << 1) | 1, 7, 8, 9, 0, 0, 0, 0];
+        assert_eq!(parse_upload_segment(&short, true).unwrap(), (vec![7, 8, 9], true));
+        // segmented download
+        let d = sdo_download_initiate(1, 0x2000, 1, 100, &[1, 2, 3]);
+        assert_eq!((d[8], d[12]), (0x21, 100));
+        let sg = sdo_download_segment(1, true, &[5, 6], true);
+        assert_eq!(sg[8], 0x10 | (5 << 1) | 1);
+        assert_eq!(sg.len(), 6 + 2 + 8);
+        let ok = vec![10, 0, 0, 0, 0, 0x13, 0x00, 0x30, 0x30, 0, 0, 0, 0, 0, 0, 0];
+        assert!(parse_download_segment_resp(&ok, true).is_ok());
+        assert!(parse_download_segment_resp(&ok, false).is_err());
         // FoE
         let w = foe_write_request(1, 0x1234, "fw.efw");
         assert_eq!(&w[..12], &[12, 0, 0, 0, 0, 0x14, 2, 0, 0x34, 0x12, 0, 0]);
