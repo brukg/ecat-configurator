@@ -192,6 +192,20 @@ their entries. Use the filter box to search by index or name.
 command form already filled in (index, subindex, name and default value).
 Change the value and press **Add**.
 
+### SoE and EoE (on the Mailbox / CoE page)
+![SoE and EoE settings](images/soe-eoe.png)
+
+- **EoE: IP settings**, shown for devices with Ethernet over EtherCAT. Tick *Set IP
+  parameters* and fill in any of MAC, IP address, subnet mask, gateway, DNS server
+  and DNS name; empty fields are not sent. The encoded *Set IP Parameter* data is
+  shown below. Validation reports malformed addresses and IP addresses used twice.
+- **SoE start-up commands**, shown for devices with Servo drive profile over
+  EtherCAT. Each row writes an IDN in a transition. Enter the drive number, the IDN
+  as `S-0-1000` or `P-0-0001` (or a number), the value and its size (2, 4 or 8
+  bytes, or raw hex), then **Add**.
+- Both are written to the ENI (`Mailbox/SoE/InitCmds`, `Mailbox/EoE/InitCmds`) and
+  read back on import.
+
 ### Distributed Clocks
 Choose the operation mode (from the ESI), make the slave the reference clock, and
 set SYNC0/SYNC1 cycle and shift times. Cycle times follow the master cycle and the

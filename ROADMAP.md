@@ -23,9 +23,10 @@ whether a generated ENI works on real hardware at all.
 5. **Online commissioning.** Switch slave states (INIT/PREOP/SAFEOP/OP), browse
    and edit the object dictionary over SDO, read and write slave EEPROM, show AL
    status codes and error counters, and measure DC propagation delays.
-6. **Other mailbox protocols in the ENI.** SoE start-up IDNs for servo drives, EoE
-   IP/MAC settings, FoE firmware download, and mailbox polling configuration
-   (`MailboxStates`).
+6. **Other mailbox protocols in the ENI.** ~~SoE start-up IDNs and EoE IP
+   settings~~ done in 0.7. Still open: FoE firmware download, mailbox polling
+   configuration (`MailboxStates`), and checking the EoE/SoE byte layout against
+   a real master (see item 2).
 7. ~~**Correct topology handling for junctions.**~~ Done in 0.6: bus order and
    auto-increment addresses from the port wiring (D, B, C), automatic re-sorting,
    port-conflict and order checks, and wiring rebuilt from a scan.

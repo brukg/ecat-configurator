@@ -25,6 +25,8 @@ ENI network information file (ETG.2100) for your EtherCAT master.
 - **Object dictionary:** read from the ESI. Pick start-up parameters and PDO entries
   by name, type values as numbers instead of hex, and get warnings for read-only
   objects, wrong sizes or unknown objects.
+- **SoE and EoE:** SoE start-up IDN writes for servo drives (S-0-…/P-0-…), and EoE
+  IP settings (MAC, IP, subnet, gateway, DNS) sent to each EoE slave.
 - **Distributed clocks:** operation modes, SYNC0/SYNC1 cycle and shift times,
   and the reference clock.
 - **ENI export and import:** all EtherCAT init commands, cyclic frames and the
