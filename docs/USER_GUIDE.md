@@ -176,11 +176,26 @@ The raw bytes written to the sync manager (0x0800+) and FMMU (0x0600+) registers
 | General | name, network adapter, source/destination MAC, EtherType, cycle time, LRW or LRD+LWR, logical start address, frame size limit, state machine timeouts, image summary |
 | Distributed Clocks | enable DC, choose the reference clock, overview of all DC slaves |
 | Process Image | every input and output variable with offsets; export as C header or CSV |
-| Cyclic Frames | cyclic commands with address, length and expected working counter, frame usage, logical address map |
+| Cyclic Frames | every cyclic frame with its commands (address, length, expected working counter, image offsets), frame usage, wire time and bus load, logical address map |
 | Init Commands | the master's broadcast init commands |
 | Topology | diagram of the network; click a device to select it |
 | Online / Scan | scan the bus and compare it with the configuration |
 | ENI Preview | the ENI exactly as it will be exported; copy or export it |
+
+### Large process images
+
+![Cyclic frames](images/frames.png)
+
+When the process data does not fit into *Max. data per frame* (General page,
+1486 bytes at most), it is split into several commands, cutting at slave
+boundaries where possible. The commands are then packed into as few frames as
+possible. Each command gets its own expected working counter: a slave counts in
+every command that covers its data (LRW: +2 for outputs, +1 for inputs). The
+AL-status read goes into the last frame that has room.
+
+The ENI contains one `<Frame>` per frame. Importing such an ENI keeps the frame
+size, so it is split the same way when exported again. The C header lists every
+command (`ECAT_CMDn_FRAME/ADDR/LEN/WKC`) and the frame count.
 
 ## Validation
 
@@ -189,7 +204,8 @@ The *Validation* tab checks the active configuration all the time. It looks for:
 - duplicate or zero station addresses, and invalid ports;
 - mandatory PDOs that are not assigned, and assigned PDOs that exclude each other;
 - sync managers above their maximum size, and mailboxes below their minimum;
-- process data larger than one frame;
+- frames that need more than half of the cycle time on a 100 Mbit/s wire (it also
+  reports, as information, when the process data is split over several frames);
 - DC problems: a mode set while DC is off, a SYNC0 cycle of 0, or a reference
   clock without DC support.
 
@@ -238,8 +254,8 @@ The scan is available on Linux and needs `CAP_NET_RAW`; see the README.
 - **Per slave:** identity, process data (sync managers, assigned and available
   PDOs), mailbox and CoE init commands, EtherCAT init commands, the previous port,
   and DC settings.
-- **Cyclic:** one LRW command (or LWR + LRD) covering all process data, plus a BRD
-  of the AL status. Outputs come first in the logical image and inputs follow them.
+- **Cyclic:** LRW commands (or LWR + LRD) covering all process data, split over
+  several frames when needed, plus a BRD of the AL status. Outputs come first in the logical image and inputs follow them.
 - **Process image:** every variable with bit size and bit offset.
 
 ## Settings and troubleshooting
@@ -255,7 +271,7 @@ The scan is available on Linux and needs `CAP_NET_RAW`; see the README.
 
 ## Known limitations
 
-- Process data larger than one Ethernet frame is reported as an error. It is not
-  split into several frames.
+- All process data runs at one cycle time; separate tasks with different cycle
+  times are not supported yet.
 - Hot-connect groups and redundancy are not configured.
 - The live bus scan is available on Linux only.

@@ -11,9 +11,10 @@ whether a generated ENI works on real hardware at all.
    XSD and test it with common masters (e.g. SOEM, IgH EtherLab, commercial
    stacks). Add per-master export profiles where they differ (logical address
    layout, init-command set, DC fields).
-3. **Large process images.** Split process data that does not fit into one
-   frame across several frames and commands, and support several cyclic tasks
-   with different cycle times.
+3. ~~**Large process images.**~~ Done in 0.3: process data split over several
+   frames and commands, with per-command working counters, wire time and bus
+   load check, and ENI round trip. Still open: several cyclic tasks with
+   different cycle times.
 4. **Complete ESI support.** Object dictionary (`Dictionary` / `DataTypes`), so
    CoE parameters can be picked by name and type instead of typed in hex.
    `AlternativeSmMapping`, multi-channel profiles (e.g. several CiA 402 axes),
