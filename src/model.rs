@@ -2132,11 +2132,8 @@ mod tests {
     fn predefined_assignments_and_external_dictionary() {
         let dir = std::env::temp_dir().join(format!("ecat-esi-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let esi = SAMPLE_DRIVE
-            .replace(
-                "<Mailbox DataLinkLayer=\"true\">",
-                "<AlternativeSmMapping Default=\"1\"><Name>CSV</Name><Sm No=\"2\"><Pdo>#x1601</Pdo></Sm><Sm No=\"3\"><Pdo>#x1A01</Pdo></Sm></AlternativeSmMapping><AlternativeSmMapping><Name>CSP</Name><Sm No=\"2\"><Pdo>#x1600</Pdo></Sm><Sm No=\"3\"><Pdo>#x1A00</Pdo></Sm></AlternativeSmMapping><Mailbox DataLinkLayer=\"true\">",
-            );
+        // the example drive with its dictionary moved into a separate file
+        let esi = SAMPLE_DRIVE.to_string();
         let start = esi.find("<Dictionary>").unwrap();
         let end = esi.find("</Dictionary>").unwrap() + "</Dictionary>".len();
         let dict = format!("<?xml version=\"1.0\"?><EtherCATDict>{}</EtherCATDict>", &esi[start..end]);
@@ -2147,14 +2144,20 @@ mod tests {
         lib.add_file(&dir.join("drive.xml")).unwrap();
         let d = &lib.devices[0];
         assert!(d.dictionary.iter().any(|o| o.index == 0x6060), "dictionary from the separate file");
+        // CSP (default) and CSV sets
         assert_eq!(d.sm_mappings.len(), 2);
+        assert!(d.sm_mappings[0].default);
         let mut s = SlaveCfg::from_device(d, 1001);
         let on: Vec<u16> = s.pdos.iter().filter(|p| p.assigned).map(|p| p.pdo.index).collect();
-        assert_eq!(on, vec![0x1601, 0x1A01]);
+        assert_eq!(on, vec![0x1600, 0x1A00]);
         assert_eq!(current_sm_mapping(&s), Some(0));
-        let csp = s.device.sm_mappings[1].clone();
-        apply_sm_mapping(&mut s.pdos, &csp);
+        let csv = s.device.sm_mappings[1].clone();
+        apply_sm_mapping(&mut s.pdos, &csv);
+        let on: Vec<u16> = s.pdos.iter().filter(|p| p.assigned).map(|p| p.pdo.index).collect();
+        assert_eq!(on, vec![0x1601, 0x1A01]);
         assert_eq!(current_sm_mapping(&s), Some(1));
+        s.pdos[0].assigned = true;
+        assert_eq!(current_sm_mapping(&s), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
