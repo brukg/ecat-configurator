@@ -79,8 +79,8 @@ Documents are completely independent. Editing one never changes another.
   PDOs, DC modes and EEPROM size. Double-click it, or press *Add to configuration*,
   to append it after the selected slave.
 - If two files describe the same vendor/product/revision, the one loaded last wins.
-- Two example devices are built in: a coupler, digital I/O, analog input and a
-  CiA 402 servo drive.
+- Example devices are built in: a coupler, digital I/O, analog input, a CiA 402
+  servo drive and a modular I/O station with three module types.
 
 ## Building the network
 
@@ -101,6 +101,26 @@ Name, station address, serial number, and the upstream device and port. **Identi
 check at start-up** chooses which values the master compares with the slave's
 EEPROM: vendor ID, product code, revision (equal / equal or higher) and serial
 number. **Watchdog** sets the process data watchdog time.
+
+### Modules (modular devices)
+![Modules page](images/modules.png)
+
+Shown for devices whose ESI describes slots, such as modular I/O stations and
+multi-axis drives.
+
+- **Plugged modules** lists the slot positions in order. Change a position's module
+  with its drop-down, reorder positions with ⬆/⬇, or remove a position with 🗑.
+- **Add a module** appends a module for a slot type, up to its maximum count.
+- The PDOs of each module are added to *Process Data* as `Slot n <module>: <PDO>`.
+  Their PDO indices move by the slot's PDO increment and their object indices
+  (0x6000–0xAFFF) move by the slot's index increment for each position.
+- At start-up the configurator writes the module ident list to object 0xF030
+  (PREOP to SAFEOP, before the PDO assignment), followed by each module's start-up
+  parameters, moved to the module's object range.
+- Validation reports slot counts outside the ESI minimum/maximum, modules that do
+  not fit their slot, and unknown module idents.
+- ENI import reads the module list back from 0xF030 and rebuilds the slots, so a
+  modular configuration survives export and re-import.
 
 ### Process Data
 - **Sync managers:** start address, size (computed from the assigned PDOs),
@@ -235,7 +255,6 @@ The scan is available on Linux and needs `CAP_NET_RAW`; see the README.
 
 ## Known limitations
 
-- Modular devices (ESI *Modules*/*Slots*) are not supported yet.
 - Process data larger than one Ethernet frame is reported as an error. It is not
   split into several frames.
 - Hot-connect groups and redundancy are not configured.

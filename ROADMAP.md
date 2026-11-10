@@ -3,9 +3,10 @@
 Ordered by how much each gap blocks real projects. The first items decide
 whether a generated ENI works on real hardware at all.
 
-1. **Modular devices (ESI Modules / Slots).** Multi-axis drives, modular I/O
-   couplers and gateways describe their PDOs per plugged module. Without slot
-   configuration these devices get wrong or empty process data.
+1. ~~**Modular devices (ESI Modules / Slots).**~~ Done in 0.2: slot
+   configuration, per-slot PDO/object shifts, module list (0xF030) and module
+   start-up parameters, validation, and ENI round trip. Still open: ESI
+   `SlotGroup`s and `ModulePdoGroup` alignment.
 2. **ENI conformance with real masters.** Validate output against the ETG.2100
    XSD and test it with common masters (e.g. SOEM, IgH EtherLab, commercial
    stacks). Add per-master export profiles where they differ (logical address

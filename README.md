@@ -13,6 +13,9 @@ ENI network information file (ETG.2100) for your EtherCAT master.
   them by name, type or product code.
 - **Network editor:** add, order and connect devices (ports A–D), set station
   addresses and start-up identity checks.
+- **Modular devices:** ESI slots and modules (modular I/O stations, multi-axis
+  drives). Pick a module per slot; PDO and object indices are shifted per slot, and
+  the module list (0xF030) is downloaded at start-up.
 - **Process data:** sync managers, PDO assignment with Exclude/Mandatory rules,
   editable PDO mapping, and a live process image with byte/bit offsets.
 - **CoE start-up commands:** generated PDO assignment/mapping SDOs plus your own
@@ -43,7 +46,7 @@ page, or build it yourself from a clone with `packaging/build-deb.sh` (see
 [Building the Debian package](#building-the-debian-package)). Then install it:
 
 ```sh
-sudo apt install ./ecat-configurator_0.1.0_amd64.deb
+sudo apt install ./ecat-configurator_<version>_amd64.deb
 ```
 
 Start **EtherCAT Configurator** from the application menu, or run
