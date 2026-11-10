@@ -342,8 +342,9 @@ the configuration when you have not scanned):
   `.bin`. Writing always asks for confirmation. Power-cycle the slave afterwards.
 - **CoE SDO** reads an object (index:subindex) or writes hex bytes to it. The
   configurator sets up the slave's standard mailbox from its EEPROM and switches it
-  to PREOP first. Expedited and normal transfers are supported; objects larger than
-  one mailbox (segmented transfer) are not yet.
+  to PREOP first. Small values use expedited transfers; objects larger than one
+  mailbox (long strings, arrays) are read and written with segmented transfers.
+  Text values are also shown as text.
 - **Firmware (FoE)**: *Download firmware file…* sends a file to the slave with File
   access over EtherCAT. Enter the file name the slave expects (defaults to the
   file's name) and the password if the vendor uses one. The slave is switched to
