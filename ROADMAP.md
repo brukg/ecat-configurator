@@ -26,9 +26,9 @@ whether a generated ENI works on real hardware at all.
 6. **Other mailbox protocols in the ENI.** SoE start-up IDNs for servo drives, EoE
    IP/MAC settings, FoE firmware download, and mailbox polling configuration
    (`MailboxStates`).
-7. **Correct topology handling for junctions.** Derive the bus order and the
-   auto-increment addresses from port wiring (port order D, B, C) instead of the
-   list order. Import topology from a scan.
+7. ~~**Correct topology handling for junctions.**~~ Done in 0.6: bus order and
+   auto-increment addresses from the port wiring (D, B, C), automatic re-sorting,
+   port-conflict and order checks, and wiring rebuilt from a scan.
 8. **Hot-connect groups and cable redundancy.**
 9. ~~**Undo/redo and copy/paste.**~~ Done in 0.5: per-document undo history and
    cut/copy/paste/duplicate of slaves with all their settings (also between

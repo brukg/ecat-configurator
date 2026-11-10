@@ -12,7 +12,9 @@ ENI network information file (ETG.2100) for your EtherCAT master.
 - **Device catalog:** load ESI files or whole folders, several at once, and search
   them by name, type or product code.
 - **Network editor:** add, order and connect devices (ports A–D), set station
-  addresses and start-up identity checks.
+  addresses and start-up identity checks. With junctions, the list follows the real
+  bus order (ports D, B, C), so auto-increment addresses match the wiring. A bus scan
+  rebuilds the wiring from the slaves' port status.
 - **Modular devices:** ESI slots and modules (modular I/O stations, multi-axis
   drives). Pick a module per slot; PDO and object indices are shifted per slot, and
   the module list (0xF030) is downloaded at start-up.

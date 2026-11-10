@@ -93,6 +93,15 @@ Documents are completely independent. Editing one never changes another.
 - **Topology:** on a slave's *General* page, *Connected to* and *port* set the
   upstream device and its port (B, C or D). *Network › Make topology linear*
   resets the chain. *Master › Topology* draws the tree.
+- **Bus order with junctions:** an EtherCAT frame passes every device through its
+  ports in the order D, B, C, and goes down each branch before coming back. After
+  you change a connection, the list is re-sorted into this order automatically, so
+  the auto-increment addresses in the ENI match the wiring. Branches are indented in
+  the tree. Validation reports a port used by two devices, and a list that does not
+  follow the wiring (e.g. from an imported file). *Network › Sort slaves by wiring*
+  fixes that.
+
+  ![Junction wiring](images/wiring.png)
 
 ### Undo, redo, copy and paste
 
@@ -267,7 +276,8 @@ Exporting an ENI, importing it again and exporting once more gives an identical 
    state) and compares it with the configuration: ✔ matches, ⚠ different revision
    or not configured, ❌ a different device or missing.
 4. **Create configuration from scan** opens a new document with the devices found
-   (matched with the catalog). **Copy serial numbers** writes the scanned serial
+   (matched with the catalog). The wiring (which port each slave hangs on) is rebuilt
+   from the slaves' port status (DL status register). **Copy serial numbers** writes the scanned serial
    numbers into the configuration.
 
 The scan is available on Linux and needs `CAP_NET_RAW`; see the README.
