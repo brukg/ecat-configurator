@@ -258,6 +258,30 @@ fn slave_page_name(p: SlaveTab) -> &'static str {
     }
 }
 
+/// Entry form for SoE start-up writes.
+struct SoeForm {
+    transition: String,
+    drive: u8,
+    idn: String,
+    value: String,
+    /// 2, 4 or 8 bytes; 0 = hex bytes as typed
+    size: u8,
+    comment: String,
+}
+
+impl Default for SoeForm {
+    fn default() -> Self {
+        SoeForm {
+            transition: "PS".into(),
+            drive: 0,
+            idn: String::new(),
+            value: String::new(),
+            size: 2,
+            comment: String::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CoeForm {
     /// Value as typed (decimal / text); encoded with the dictionary type when known.
@@ -335,6 +359,7 @@ pub struct App {
     focus_req: Option<Tab>,
     filter: String,
     od_filter: String,
+    soe_form: SoeForm,
     /// Scroll the start-up command form into view on the next draw.
     coe_scroll: bool,
     log: Vec<(String, Severity, String)>,
@@ -394,6 +419,7 @@ impl App {
             focus_req: None,
             filter: String::new(),
             od_filter: String::new(),
+            soe_form: SoeForm::default(),
             coe_scroll: false,
             log: Vec::new(),
             dirty: false,
@@ -3636,6 +3662,126 @@ impl App {
                     ui.end_row();
                 }
             });
+            if mb.eoe {
+                ui.add_space(8.0);
+                sub_header(ui, "EoE: IP settings sent at start-up");
+                changed |= ui.checkbox(&mut s.eoe.enabled, "Set IP parameters in the PREOP to SAFEOP transition").changed();
+                ui.add_enabled_ui(s.eoe.enabled, |ui| {
+                    egui::Grid::new("eoe").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                        for (label, field, hint) in [
+                            ("MAC address", &mut s.eoe.mac, "02:00:00:00:10:01"),
+                            ("IP address", &mut s.eoe.ip, "192.168.10.5"),
+                            ("Subnet mask", &mut s.eoe.subnet, "255.255.255.0"),
+                            ("Default gateway", &mut s.eoe.gateway, "192.168.10.1"),
+                            ("DNS server", &mut s.eoe.dns, ""),
+                            ("DNS name", &mut s.eoe.dns_name, "drive5"),
+                        ] {
+                            ui.label(label);
+                            changed |= ui.add(egui::TextEdit::singleline(field).desired_width(200.0).hint_text(hint)).changed();
+                            ui.end_row();
+                        }
+                    });
+                });
+                if s.eoe.enabled {
+                    match crate::proto::eoe_set_ip_data(&s.eoe) {
+                        Ok(d) => {
+                            ui.label(
+                                RichText::new(format!("Sent as EoE Set IP Parameter: {}", bytes_to_hex_spaced(&d)))
+                                    .small()
+                                    .monospace()
+                                    .weak(),
+                            );
+                        }
+                        Err(e) => {
+                            ui.label(RichText::new(e).color(WARN));
+                        }
+                    }
+                }
+            }
+            if mb.soe {
+                ui.add_space(8.0);
+                sub_header(ui, "SoE start-up commands (IDN writes)");
+                let mut del = None;
+                if s.soe_cmds.is_empty() {
+                    ui.label(RichText::new("No SoE commands yet.").italics().weak());
+                } else {
+                    egui::Grid::new("soe").striped(true).num_columns(7).spacing([12.0, 4.0]).show(ui, |ui| {
+                        for h in ["On", "Transition", "Drive", "IDN", "Data", "Comment", ""] {
+                            ui.strong(h);
+                        }
+                        ui.end_row();
+                        for (k, c) in s.soe_cmds.iter_mut().enumerate() {
+                            changed |= ui.checkbox(&mut c.enabled, "").changed();
+                            ui.label(&c.transition);
+                            ui.label(c.drive_no.to_string());
+                            ui.monospace(format!("{}  ({})", crate::proto::format_idn(c.idn), c.idn));
+                            ui.monospace(bytes_to_hex_spaced(&c.data));
+                            ui.label(&c.comment);
+                            if ui.small_button("🗑").clicked() {
+                                del = Some(k);
+                            }
+                            ui.end_row();
+                        }
+                    });
+                }
+                if let Some(k) = del {
+                    s.soe_cmds.remove(k);
+                    changed = true;
+                }
+                let sf = &mut self.soe_form;
+                ui.horizontal_wrapped(|ui| {
+                    egui::ComboBox::from_id_salt("soetr")
+                        .selected_text(sf.transition.clone())
+                        .width(50.0)
+                        .show_ui(ui, |ui| {
+                            for t in ["PS", "SO", "SP", "OP", "OS"] {
+                                ui.selectable_value(&mut sf.transition, t.to_string(), t);
+                            }
+                        });
+                    ui.label("drive");
+                    ui.add(egui::DragValue::new(&mut sf.drive).range(0..=7));
+                    ui.label("IDN");
+                    ui.add(egui::TextEdit::singleline(&mut sf.idn).desired_width(90.0).hint_text("S-0-1000"));
+                    ui.label("value");
+                    ui.add(egui::TextEdit::singleline(&mut sf.value).desired_width(110.0).hint_text("10000"));
+                    egui::ComboBox::from_id_salt("soesz")
+                        .selected_text(match sf.size {
+                            0 => "hex bytes".to_string(),
+                            n => format!("{} bytes", n),
+                        })
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            for (n, l) in [(2u8, "2 bytes"), (4, "4 bytes"), (8, "8 bytes"), (0, "hex bytes")] {
+                                ui.selectable_value(&mut sf.size, n, l);
+                            }
+                        });
+                    ui.label("comment");
+                    ui.add(egui::TextEdit::singleline(&mut sf.comment).desired_width(160.0));
+                    let idn = crate::proto::parse_idn(&sf.idn);
+                    let data: Option<Vec<u8>> = if sf.size == 0 {
+                        Some(hex_to_bytes(&sf.value)).filter(|d| !d.is_empty())
+                    } else {
+                        parse_num(&sf.value).map(|v| v.to_le_bytes()[..sf.size as usize].to_vec())
+                    };
+                    if ui.add_enabled(idn.is_some() && data.is_some(), egui::Button::new("➕ Add")).clicked() {
+                        s.soe_cmds.push(crate::proto::SoeInitCmd {
+                            transition: sf.transition.clone(),
+                            drive_no: sf.drive,
+                            idn: idn.unwrap_or(0),
+                            data: data.unwrap_or_default(),
+                            comment: sf.comment.clone(),
+                            enabled: true,
+                        });
+                        sf.idn.clear();
+                        sf.value.clear();
+                        sf.comment.clear();
+                        changed = true;
+                    }
+                    if !sf.idn.trim().is_empty() && idn.is_none() {
+                        ui.label(RichText::new("IDN like S-0-1000 or P-0-0001").color(WARN));
+                    }
+                });
+            }
             if mb.coe.is_none() {
                 return;
             }

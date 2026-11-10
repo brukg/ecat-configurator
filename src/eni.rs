@@ -231,6 +231,41 @@ pub fn export_eni(p: &Project) -> String {
                 let _ = coe;
                 x.close("CoE");
             }
+            let soe: Vec<&crate::proto::SoeInitCmd> = s.soe_cmds.iter().filter(|c| c.enabled).collect();
+            if mb.soe && !soe.is_empty() {
+                x.open("SoE");
+                x.open("InitCmds");
+                for c in soe {
+                    x.open("InitCmd");
+                    x.leaf("Transition", &c.transition);
+                    x.leaf("Comment", &c.comment);
+                    x.leaf("Timeout", p.master.timeout_mailbox_ms);
+                    x.leaf("OpCode", 3);
+                    x.leaf("DriveNo", c.drive_no);
+                    x.leaf("IDN", c.idn);
+                    x.leaf("Elements", 64);
+                    x.leaf("Attribute", 0);
+                    x.leaf("Data", bytes_to_hex(&c.data));
+                    x.close("InitCmd");
+                }
+                x.close("InitCmds");
+                x.close("SoE");
+            }
+            if mb.eoe && s.eoe.enabled {
+                if let Ok(d) = crate::proto::eoe_set_ip_data(&s.eoe) {
+                    x.open("EoE");
+                    x.open("InitCmds");
+                    x.open("InitCmd");
+                    x.leaf("Transition", "PS");
+                    x.leaf("Comment", "set IP parameter");
+                    x.leaf("Timeout", p.master.timeout_mailbox_ms);
+                    x.leaf("Type", 2);
+                    x.leaf("Data", bytes_to_hex(&d));
+                    x.close("InitCmd");
+                    x.close("InitCmds");
+                    x.close("EoE");
+                }
+            }
             x.close("Mailbox");
         }
         x.open("InitCmds");
@@ -757,6 +792,25 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                 }
                 sc.coe_cmds = cmds;
             }
+            if let Some(ics) = child(m, "SoE").and_then(|c| child(c, "InitCmds")) {
+                sc.soe_cmds = kids(ics, "InitCmd")
+                    .map(|c| crate::proto::SoeInitCmd {
+                        transition: kids(c, "Transition").next().and_then(|t| t.text()).unwrap_or("PS").trim().to_string(),
+                        drive_no: num(child(c, "DriveNo")) as u8,
+                        idn: num(child(c, "IDN")) as u16,
+                        data: hex_to_bytes(&txt(child(c, "Data"))),
+                        comment: txt(child(c, "Comment")),
+                        enabled: true,
+                    })
+                    .collect();
+            }
+            if let Some(ics) = child(m, "EoE").and_then(|c| child(c, "InitCmds")) {
+                for c in kids(ics, "InitCmd") {
+                    if let Some(cfg) = crate::proto::eoe_parse_set_ip(&hex_to_bytes(&txt(child(c, "Data")))) {
+                        sc.eoe = cfg;
+                    }
+                }
+            }
         }
         // identity checks from the init commands
         if let Some(ics) = child(s, "InitCmds") {
@@ -848,8 +902,24 @@ mod tests {
         lib.add_xml(SAMPLE_IO, "io").unwrap();
         lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
         lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
-        let p = demo_project(&lib);
+        let mut p = demo_project(&lib);
+        let k = p.slaves.iter().position(|s| s.device.type_name == "SD200").unwrap();
+        p.slaves[k].soe_cmds.push(crate::proto::SoeInitCmd {
+            transition: "PS".into(),
+            drive_no: 0,
+            idn: crate::proto::parse_idn("S-0-1000").unwrap(),
+            data: vec![0x10, 0x27],
+            comment: "test".into(),
+            enabled: true,
+        });
+        p.slaves[k].eoe = crate::proto::EoeCfg {
+            enabled: true,
+            ip: "192.168.10.5".into(),
+            subnet: "255.255.255.0".into(),
+            ..Default::default()
+        };
         let xml = export_eni(&p);
+        assert!(xml.contains("<SoE>") && xml.contains("<EoE>"));
         roxmltree::Document::parse(&xml).unwrap();
         let (q, _) = import_eni(&xml, &lib).unwrap();
         assert_eq!(q.slaves.len(), p.slaves.len());
@@ -858,6 +928,8 @@ mod tests {
         assert_eq!(a.out_size, b.out_size);
         assert_eq!(a.in_size, b.in_size);
         assert_eq!(export_eni(&q), xml);
+        assert_eq!(q.slaves[k].soe_cmds, p.slaves[k].soe_cmds);
+        assert_eq!(q.slaves[k].eoe, p.slaves[k].eoe);
         // the modular station keeps its three modules through the round trip
         let m = q.slaves.iter().find(|s| !s.device.slots.is_empty()).unwrap();
         assert_eq!(m.modules.iter().map(|x| x.ident).collect::<Vec<_>>(), vec![0x101, 0x102, 0x103]);

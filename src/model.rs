@@ -125,6 +125,12 @@ pub struct SlaveCfg {
     /// Modules plugged into the slots of a modular device, in slot order.
     #[serde(default)]
     pub modules: Vec<ModuleInst>,
+    /// SoE start-up writes (servo drives).
+    #[serde(default)]
+    pub soe_cmds: Vec<crate::proto::SoeInitCmd>,
+    /// EoE IP settings sent at start-up.
+    #[serde(default)]
+    pub eoe: crate::proto::EoeCfg,
 }
 
 /// One configured slot position: which slot type and which module.
@@ -316,6 +322,8 @@ impl SlaveCfg {
             watchdog_ms: 100,
             generate_pdo_cmds: true,
             modules,
+            soe_cmds: Vec::new(),
+            eoe: Default::default(),
         }
     }
 
@@ -1516,6 +1524,43 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
                                 );
                             }
                         }
+                    }
+                }
+            }
+        }
+        let mbx = s.device.mailbox.as_ref();
+        if s.soe_cmds.iter().any(|c| c.enabled) && !mbx.map(|m| m.soe).unwrap_or(false) {
+            push(
+                Severity::Error,
+                Some(i),
+                format!("{}: SoE start-up commands are set but the device has no SoE mailbox.", s.name),
+            );
+        }
+        for c in s.soe_cmds.iter().filter(|c| c.enabled && c.data.is_empty()) {
+            push(
+                Severity::Error,
+                Some(i),
+                format!("{}: SoE command {} has no data.", s.name, crate::proto::format_idn(c.idn)),
+            );
+        }
+        if s.eoe.enabled {
+            if !mbx.map(|m| m.eoe).unwrap_or(false) {
+                push(
+                    Severity::Error,
+                    Some(i),
+                    format!("{}: EoE IP settings are set but the device has no EoE mailbox.", s.name),
+                );
+            } else if let Err(e) = crate::proto::eoe_set_ip_data(&s.eoe) {
+                push(Severity::Error, Some(i), format!("{}: EoE settings: {}.", s.name, e));
+            }
+            if !s.eoe.ip.trim().is_empty() {
+                if let Some(j) = p.slaves.iter().position(|o| o.eoe.enabled && o.eoe.ip.trim() == s.eoe.ip.trim()) {
+                    if j < i {
+                        push(
+                            Severity::Error,
+                            Some(i),
+                            format!("{}: EoE IP address {} is also used by {}.", s.name, s.eoe.ip.trim(), p.slaves[j].name),
+                        );
                     }
                 }
             }

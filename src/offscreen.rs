@@ -91,6 +91,7 @@ pub fn screenshot(opts: StartOptions, path: &Path, w: u32, h: u32, frames: u32) 
         Key(egui::Key, egui::Modifiers),
         Copy,
         Paste,
+        Text(String),
     }
     let acts: Vec<(u32, Act)> = std::env::var("ECAT_TEST_CLICKS")
         .unwrap_or_default()
@@ -115,6 +116,7 @@ pub fn screenshot(opts: StartOptions, path: &Path, w: u32, h: u32, frames: u32) 
                     Some((f, Act::Key(key, m)))
                 }
                 Some("copy") => Some((f, Act::Copy)),
+                Some("text") => Some((f, Act::Text(v.get(2..).map(|r| r.join(":")).unwrap_or_default()))),
                 Some("paste") => Some((f, Act::Paste)),
                 Some(x) => Some((f, Act::Click(x.parse().ok()?, v.get(2)?.parse().ok()?))),
                 None => None,
@@ -158,6 +160,7 @@ pub fn screenshot(opts: StartOptions, path: &Path, w: u32, h: u32, frames: u32) 
                 }
                 Act::Copy if f == *cf => events.push(egui::Event::Copy),
                 Act::Paste if f == *cf => events.push(egui::Event::Paste(String::new())),
+                Act::Text(t) if f == *cf => events.push(egui::Event::Text(t.clone())),
                 _ => {}
             }
         }

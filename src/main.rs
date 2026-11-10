@@ -4,6 +4,7 @@ mod export;
 mod model;
 mod od;
 mod offscreen;
+mod proto;
 mod scan;
 mod sii;
 mod ui;
