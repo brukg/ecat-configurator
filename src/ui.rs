@@ -452,7 +452,12 @@ impl App {
             },
             scan_rx: None,
             scanned: Vec::new(),
-            adapters: scan::list_adapters(),
+            // pictures (--screenshot) never show this computer's real adapters or MAC addresses
+            adapters: if persist {
+                scan::list_adapters()
+            } else {
+                vec![("eth0".into(), "02:00:00:00:00:01".into())]
+            },
             show_about: false,
             settings,
             persist,
@@ -534,6 +539,22 @@ impl App {
                 }
                 "init" => {
                     app.slave_tab = SlaveTab::InitCmds;
+                }
+                "online" => {
+                    app.sel = Sel::Master;
+                    app.master_tab = MasterTab::Online;
+                }
+                "tasks" => {
+                    // the first servo drive runs in a slower second task
+                    app.project.master.tasks.push(crate::model::TaskCfg {
+                        name: "Task 2".into(),
+                        cycle_time_us: 4000,
+                    });
+                    if let Some(k) = app.project.slaves.iter().position(|s| s.device.type_name == "SD200") {
+                        app.project.slaves[k].task = 1;
+                    }
+                    app.sel = Sel::Master;
+                    app.master_tab = MasterTab::Cyclic;
                 }
                 "eeprom" => {
                     app.slave_tab = SlaveTab::Eeprom;
