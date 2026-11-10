@@ -1,3 +1,4 @@
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 //! Online bus scan over a raw Ethernet socket (Linux, needs CAP_NET_RAW or root).
 
 use std::sync::mpsc::{channel, Receiver, Sender};

@@ -3,6 +3,7 @@
 use crate::esi::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const CMD_APRD: u8 = 1;
 pub const CMD_APWR: u8 = 2;
 pub const CMD_FPRD: u8 = 4;
