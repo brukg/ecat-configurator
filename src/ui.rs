@@ -258,6 +258,21 @@ fn slave_page_name(p: SlaveTab) -> &'static str {
     }
 }
 
+/// State of the commissioning panel (Online page).
+#[derive(Default)]
+struct OnlineUi {
+    rx: Option<std::sync::mpsc::Receiver<crate::online::OnlineMsg>>,
+    pos: u16,
+    busy: String,
+    status: Option<crate::online::Status>,
+    eeprom: Option<(u16, Vec<u8>)>,
+    sdo_index: String,
+    sdo_sub: String,
+    sdo_value: String,
+    sdo_result: String,
+    confirm_write: Option<(u16, Vec<u8>, String)>,
+}
+
 /// Entry form for SoE start-up writes.
 struct SoeForm {
     transition: String,
@@ -359,6 +374,7 @@ pub struct App {
     focus_req: Option<Tab>,
     filter: String,
     od_filter: String,
+    online: OnlineUi,
     soe_form: SoeForm,
     /// Scroll the start-up command form into view on the next draw.
     coe_scroll: bool,
@@ -419,6 +435,7 @@ impl App {
             focus_req: None,
             filter: String::new(),
             od_filter: String::new(),
+            online: OnlineUi::default(),
             soe_form: SoeForm::default(),
             coe_scroll: false,
             log: Vec::new(),
@@ -1101,6 +1118,237 @@ impl App {
         }
         self.scanned.clear();
         self.scan_rx = Some(scan::start_scan(self.project.master.adapter.clone()));
+    }
+
+    fn online_start(&mut self, req: crate::online::Request, what: &str) {
+        if self.online.rx.is_some() {
+            return;
+        }
+        let pos = self.online.pos;
+        self.online.busy = format!("{} (position {})…", what, pos);
+        self.info(&format!("Online: {} on slave at position {}", what, pos));
+        self.online.rx = Some(crate::online::start(self.project.master.adapter.clone(), pos, req));
+    }
+
+    fn poll_online(&mut self) {
+        use crate::online::{OnlineMsg, Reply};
+        let msgs: Vec<OnlineMsg> = match &self.online.rx {
+            Some(rx) => rx.try_iter().collect(),
+            None => return,
+        };
+        for m in msgs {
+            match m {
+                OnlineMsg::Progress(t) => self.online.busy = t,
+                OnlineMsg::Done(r) => {
+                    self.online.rx = None;
+                    self.online.busy.clear();
+                    match r {
+                        Ok(Reply::Status(st)) => {
+                            self.info(&format!(
+                                "Online: AL status {} (code {:#06x}: {})",
+                                scan::al_state_name(st.al_status),
+                                st.al_code,
+                                crate::online::al_code_text(st.al_code)
+                            ));
+                            self.online.status = Some(st);
+                        }
+                        Ok(Reply::State(al)) => self.info(&format!("Online: slave is now in {}", scan::al_state_name(al))),
+                        Ok(Reply::Eeprom(b)) => {
+                            self.info(&format!("Online: read {} EEPROM bytes", b.len()));
+                            self.online.eeprom = Some((self.online.pos, b));
+                        }
+                        Ok(Reply::Written(n)) => self.info(&format!("Online: wrote {} EEPROM bytes; power-cycle the slave to load them", n)),
+                        Ok(Reply::Sdo(d)) => {
+                            self.online.sdo_result = bytes_to_hex_spaced(&d);
+                            self.info(&format!("Online: SDO read {}", self.online.sdo_result));
+                        }
+                        Ok(Reply::SdoWritten) => {
+                            self.online.sdo_result = "written".into();
+                            self.info("Online: SDO written");
+                        }
+                        Err(e) => self.err(&format!("Online: {}", e)),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Single-slave commissioning panel on the Online page.
+    fn commissioning(&mut self, ui: &mut egui::Ui) {
+        use crate::online::Request;
+        sub_header(ui, "Commissioning a single slave");
+        let busy = self.online.rx.is_some();
+        let count = self.scanned.len().max(self.project.slaves.len()).max(1) as u16;
+        if self.online.pos >= count {
+            self.online.pos = 0;
+        }
+        let label_of = |me: &App, k: u16| -> String {
+            if let Some(s) = me.scanned.get(k as usize) {
+                let t = me
+                    .lib
+                    .find_best(s.vendor, s.product, s.revision)
+                    .map(|d| d.type_name.clone())
+                    .unwrap_or_else(|| format!("{:#010x}", s.product));
+                format!("{}: {} (scanned)", k, t)
+            } else if let Some(s) = me.project.slaves.get(k as usize) {
+                format!("{}: {} (configured)", k, s.name)
+            } else {
+                format!("{}", k)
+            }
+        };
+        let cur = label_of(self, self.online.pos);
+        let labels: Vec<String> = (0..count).map(|k| label_of(self, k)).collect();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Slave at position");
+            egui::ComboBox::from_id_salt("onpos").selected_text(cur).width(260.0).show_ui(ui, |ui| {
+                for (k, l) in labels.iter().enumerate() {
+                    ui.selectable_value(&mut self.online.pos, k as u16, l);
+                }
+            });
+            ui.add_enabled_ui(!busy, |ui| {
+                if ui.button("Status & error counters").clicked() {
+                    self.online_start(Request::Status, "reading status");
+                }
+                ui.separator();
+                ui.label("State:");
+                for (st, name) in [(1u8, "INIT"), (2, "PREOP"), (3, "BOOT")] {
+                    if ui
+                        .button(name)
+                        .on_hover_text(format!("Request {} (SAFEOP and OP need cyclic process data from a master)", name))
+                        .clicked()
+                    {
+                        self.online_start(Request::SetState(st), &format!("requesting {}", name));
+                    }
+                }
+            });
+            if busy {
+                ui.label(RichText::new(format!("⏳ {}", self.online.busy)).color(ACCENT));
+            }
+        });
+        if let Some(st) = &self.online.status {
+            let c = &st.counters;
+            let g = |k: usize| c.get(k).copied().unwrap_or(0);
+            ui.label(format!(
+                "AL status: {}   AL status code: {:#06x} ({})",
+                scan::al_state_name(st.al_status),
+                st.al_code,
+                crate::online::al_code_text(st.al_code)
+            ));
+            egui::Grid::new("errcnt").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
+                for h in ["Counter", "Port A", "Port B", "Port C", "Port D"] {
+                    ui.strong(h);
+                }
+                ui.end_row();
+                ui.label("Invalid frames");
+                for p in 0..4 {
+                    ui.label(g(2 * p).to_string());
+                }
+                ui.end_row();
+                ui.label("RX errors");
+                for p in 0..4 {
+                    ui.label(g(2 * p + 1).to_string());
+                }
+                ui.end_row();
+                ui.label("Forwarded RX errors");
+                for p in 0..4 {
+                    ui.label(g(8 + p).to_string());
+                }
+                ui.end_row();
+                ui.label("Lost links");
+                for p in 0..4 {
+                    ui.label(g(16 + p).to_string());
+                }
+                ui.end_row();
+            });
+            ui.label(format!("Processing unit errors: {}   PDI errors: {}", g(12), g(13)));
+        }
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("EEPROM:");
+            ui.add_enabled_ui(!busy, |ui| {
+                if ui.button("Read").clicked() {
+                    self.online_start(Request::ReadEeprom, "reading EEPROM");
+                }
+                let pos = self.online.pos as usize;
+                if let Some(s) = self.project.slaves.get(pos) {
+                    if ui
+                        .button("Write image of the configured slave…")
+                        .on_hover_text("EEPROM content generated from the ESI of the configured slave at this position")
+                        .clicked()
+                    {
+                        let alias = s.hot_connect.as_ref().map(|h| h.alias).unwrap_or(0);
+                        let img = sii::build_sii(&s.device, s.serial, alias);
+                        self.online.confirm_write = Some((self.online.pos, img, format!("the image generated for {}", s.name)));
+                    }
+                }
+                if ui.button("Write from file…").clicked() {
+                    if let Some(f) = rfd::FileDialog::new().add_filter("EEPROM image (*.bin)", &["bin"]).pick_file() {
+                        match std::fs::read(&f) {
+                            Ok(b) if !b.is_empty() => self.online.confirm_write = Some((self.online.pos, b, f.display().to_string())),
+                            Ok(_) => self.warn("The file is empty"),
+                            Err(e) => self.err(&format!("Cannot read {}: {}", f.display(), e)),
+                        }
+                    }
+                }
+            });
+            if let Some((p, b)) = self.online.eeprom.clone() {
+                ui.label(format!("read from position {}: {} bytes", p, b.len()));
+                if ui.button("Save as .bin…").clicked() {
+                    self.save_text("Save EEPROM", &format!("eeprom_pos{}.bin", p), "bin", &b);
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("CoE SDO:");
+            ui.add(egui::TextEdit::singleline(&mut self.online.sdo_index).desired_width(60.0).hint_text("1008"));
+            ui.label(":");
+            ui.add(egui::TextEdit::singleline(&mut self.online.sdo_sub).desired_width(30.0).hint_text("0"));
+            let idx = u16::from_str_radix(self.online.sdo_index.trim().trim_start_matches("0x").trim_start_matches("#x"), 16).ok();
+            let sub = parse_num(if self.online.sdo_sub.trim().is_empty() {
+                "0"
+            } else {
+                self.online.sdo_sub.trim()
+            })
+            .map(|v| v as u8);
+            ui.add_enabled_ui(!busy && idx.is_some() && sub.is_some(), |ui| {
+                if ui.button("Read").clicked() {
+                    self.online_start(
+                        Request::SdoUpload {
+                            index: idx.unwrap_or(0),
+                            sub: sub.unwrap_or(0),
+                        },
+                        "reading SDO",
+                    );
+                }
+            });
+            ui.add(
+                egui::TextEdit::singleline(&mut self.online.sdo_value)
+                    .desired_width(140.0)
+                    .hint_text("hex bytes, e.g. 10 27 00 00"),
+            );
+            let data = hex_to_bytes(&self.online.sdo_value);
+            ui.add_enabled_ui(!busy && idx.is_some() && sub.is_some() && !data.is_empty(), |ui| {
+                if ui.button("Write").clicked() {
+                    self.online_start(
+                        Request::SdoDownload {
+                            index: idx.unwrap_or(0),
+                            sub: sub.unwrap_or(0),
+                            data: data.clone(),
+                        },
+                        "writing SDO",
+                    );
+                }
+            });
+            if !self.online.sdo_result.is_empty() {
+                ui.label(RichText::new(format!("→ {}", self.online.sdo_result)).monospace());
+            }
+        });
+        ui.label(
+            RichText::new("Uses the adapter above. SDO access sets up the slave's standard mailbox from its EEPROM and switches it to PREOP. Needs Linux and the CAP_NET_RAW capability.")
+                .small()
+                .weak(),
+        );
+        ui.add_space(8.0);
     }
 
     fn poll_scan(&mut self) {
@@ -2881,6 +3129,7 @@ impl App {
         });
         ui.label(RichText::new("The scan sends raw EtherCAT frames on the selected adapter; it needs root rights or the CAP_NET_RAW capability.").weak());
         ui.add_space(6.0);
+        self.commissioning(ui);
         sub_header(ui, "Scanned slaves compared with the configuration");
         if self.scanned.is_empty() {
             ui.label(RichText::new("No scan result yet.").italics().weak());
@@ -4496,6 +4745,43 @@ impl App {
     /// Draw one frame (used by the window and by the off-screen picture mode).
     pub fn ui(&mut self, ctx: &egui::Context) {
         self.poll_scan();
+        self.poll_online();
+        if self.online.rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // EEPROM write needs an explicit yes
+        if let Some((pos, img, src)) = self.online.confirm_write.clone() {
+            let mut go = false;
+            let mut cancel = false;
+            egui::Window::new("Write EEPROM")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Overwrite the EEPROM of the slave at position {} with {} ({} bytes)?",
+                        pos,
+                        src,
+                        img.len()
+                    ));
+                    ui.label(RichText::new("A wrong image can make the slave unusable until it is rewritten.").color(WARN));
+                    ui.horizontal(|ui| {
+                        if ui.button("Write EEPROM").clicked() {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            if go {
+                self.online.confirm_write = None;
+                self.online.pos = pos;
+                self.online_start(crate::online::Request::WriteEeprom(img), "writing EEPROM");
+            } else if cancel {
+                self.online.confirm_write = None;
+            }
+        }
         if self.scan_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

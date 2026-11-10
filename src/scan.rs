@@ -64,7 +64,7 @@ pub fn start_scan(adapter: String) -> Receiver<ScanMsg> {
 }
 
 #[cfg(target_os = "linux")]
-mod raw {
+pub(crate) mod raw {
     use std::time::{Duration, Instant};
 
     pub struct Sock {
@@ -185,7 +185,7 @@ mod raw {
     }
 }
 
-fn parse_mac(s: &str) -> [u8; 6] {
+pub(crate) fn parse_mac(s: &str) -> [u8; 6] {
     let b = crate::util::hex_to_bytes(s);
     if b.len() == 6 && b.iter().any(|x| *x != 0) {
         let mut m = [0u8; 6];
