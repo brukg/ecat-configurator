@@ -663,6 +663,7 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                     source_file: "ENI".into(),
                     slots: vec![],
                     modules: vec![],
+                    dictionary: vec![],
                 }
             }
         };

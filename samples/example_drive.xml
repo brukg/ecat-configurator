@@ -13,7 +13,51 @@
         <Type ProductCode="#x00100200" RevisionNo="#x00020001">SD200</Type>
         <Name>SD200 Servo Drive CiA402</Name>
         <GroupType>Drives</GroupType>
-        <Profile><ProfileNo>402</ProfileNo><AddInfo>2</AddInfo></Profile>
+        <Profile>
+          <ProfileNo>402</ProfileNo>
+          <AddInfo>2</AddInfo>
+          <Dictionary>
+            <DataTypes>
+              <DataType><Name>USINT</Name><BitSize>8</BitSize></DataType>
+              <DataType><Name>SINT</Name><BitSize>8</BitSize></DataType>
+              <DataType><Name>UINT</Name><BitSize>16</BitSize></DataType>
+              <DataType><Name>DINT</Name><BitSize>32</BitSize></DataType>
+              <DataType><Name>UDINT</Name><BitSize>32</BitSize></DataType>
+              <DataType><Name>STRING(5)</Name><BitSize>40</BitSize></DataType>
+              <DataType><Name>DT1C12ARR</Name><BaseType>UINT</BaseType><BitSize>32</BitSize><ArrayInfo><LBound>1</LBound><Elements>2</Elements></ArrayInfo></DataType>
+              <DataType><Name>DT1C12</Name><BitSize>48</BitSize>
+                <SubItem><SubIdx>0</SubIdx><Name>SubIndex 000</Name><Type>USINT</Type><BitSize>8</BitSize><BitOffs>0</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+                <SubItem><Name>Elements</Name><Type>DT1C12ARR</Type><BitSize>32</BitSize><BitOffs>16</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+              </DataType>
+              <DataType><Name>DT60C2</Name><BitSize>32</BitSize>
+                <SubItem><SubIdx>0</SubIdx><Name>SubIndex 000</Name><Type>USINT</Type><BitSize>8</BitSize><BitOffs>0</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+                <SubItem><SubIdx>1</SubIdx><Name>Time period value</Name><Type>USINT</Type><BitSize>8</BitSize><BitOffs>16</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+                <SubItem><SubIdx>2</SubIdx><Name>Time period index</Name><Type>SINT</Type><BitSize>8</BitSize><BitOffs>24</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+              </DataType>
+            </DataTypes>
+            <Objects>
+            <Object><Index>#x1000</Index><Name>Device type</Name><Type>UDINT</Type><BitSize>32</BitSize><Info><DefaultData>92010200</DefaultData></Info><Flags><Access>ro</Access></Flags></Object>
+            <Object><Index>#x1008</Index><Name>Device name</Name><Type>STRING(5)</Type><BitSize>40</BitSize><Info><DefaultData>5344323030</DefaultData></Info><Flags><Access>ro</Access></Flags></Object>
+            <Object><Index>#x1C12</Index><Name>RxPDO assign</Name><Type>DT1C12</Type><BitSize>48</BitSize><Info><SubItem><Name>SubIndex 000</Name><Info><DefaultData>01</DefaultData></Info></SubItem><SubItem><Name>SubIndex 001</Name><Info><DefaultData>0016</DefaultData></Info></SubItem></Info><Flags><Access>rw</Access></Flags></Object>
+            <Object><Index>#x6040</Index><Name>Controlword</Name><Type>UINT</Type><BitSize>16</BitSize><Info><DefaultData>0000</DefaultData></Info><Flags><Access>rw</Access><PdoMapping>R</PdoMapping></Flags></Object>
+            <Object><Index>#x6041</Index><Name>Statusword</Name><Type>UINT</Type><BitSize>16</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x6060</Index><Name>Modes of operation</Name><Type>SINT</Type><BitSize>8</BitSize><Info><DefaultData>08</DefaultData></Info><Flags><Access>rw</Access><PdoMapping>R</PdoMapping></Flags></Object>
+            <Object><Index>#x6061</Index><Name>Modes of operation display</Name><Type>SINT</Type><BitSize>8</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x6064</Index><Name>Position actual value</Name><Type>DINT</Type><BitSize>32</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x606C</Index><Name>Velocity actual value</Name><Type>DINT</Type><BitSize>32</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x607A</Index><Name>Target position</Name><Type>DINT</Type><BitSize>32</BitSize><Info><DefaultData>00000000</DefaultData></Info><Flags><Access>rw</Access><PdoMapping>R</PdoMapping></Flags></Object>
+            <Object><Index>#x6081</Index><Name>Profile velocity</Name><Type>UDINT</Type><BitSize>32</BitSize><Info><DefaultData>10270000</DefaultData></Info><Flags><Access>rw</Access></Flags></Object>
+            <Object><Index>#x6083</Index><Name>Profile acceleration</Name><Type>UDINT</Type><BitSize>32</BitSize><Info><DefaultData>A0860100</DefaultData></Info><Flags><Access>rw</Access></Flags></Object>
+            <Object><Index>#x6084</Index><Name>Profile deceleration</Name><Type>UDINT</Type><BitSize>32</BitSize><Info><DefaultData>A0860100</DefaultData></Info><Flags><Access>rw</Access></Flags></Object>
+            <Object><Index>#x60B8</Index><Name>Touch probe function</Name><Type>UINT</Type><BitSize>16</BitSize><Flags><Access>rw</Access><PdoMapping>R</PdoMapping></Flags></Object>
+            <Object><Index>#x60B9</Index><Name>Touch probe status</Name><Type>UINT</Type><BitSize>16</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x60BA</Index><Name>Touch probe pos1 pos value</Name><Type>DINT</Type><BitSize>32</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x60C2</Index><Name>Interpolation time period</Name><Type>DT60C2</Type><BitSize>32</BitSize><Info><SubItem><Name>SubIndex 000</Name><Info><DefaultData>02</DefaultData></Info></SubItem><SubItem><Name>Time period value</Name><Info><DefaultData>01</DefaultData></Info></SubItem><SubItem><Name>Time period index</Name><Info><DefaultData>FD</DefaultData></Info></SubItem></Info><Flags><Access>rw</Access></Flags></Object>
+            <Object><Index>#x60F4</Index><Name>Following error actual value</Name><Type>DINT</Type><BitSize>32</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+            <Object><Index>#x60FF</Index><Name>Target velocity</Name><Type>DINT</Type><BitSize>32</BitSize><Info><DefaultData>00000000</DefaultData></Info><Flags><Access>rw</Access><PdoMapping>R</PdoMapping></Flags></Object>
+            </Objects>
+          </Dictionary>
+        </Profile>
         <Fmmu>Outputs</Fmmu>
         <Fmmu>Inputs</Fmmu>
         <Fmmu>MBoxState</Fmmu>

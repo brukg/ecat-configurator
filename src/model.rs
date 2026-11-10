@@ -1314,6 +1314,56 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
                 );
             }
         }
+        // start-up SDOs checked against the device's object dictionary
+        if !s.device.dictionary.is_empty() {
+            for c in slave_coe_cmds(p, i).iter().filter(|c| !c.generated) {
+                let at = format!("{:04X}:{:02X}", c.index, c.subindex);
+                match crate::od::lookup(&s.device.dictionary, c.index, c.subindex) {
+                    None => {
+                        if !s.device.dictionary.iter().any(|o| o.index == c.index) {
+                            push(
+                                Severity::Warning,
+                                Some(i),
+                                format!("{}: start-up command {} writes an object that is not in the device's dictionary.", s.name, at),
+                            );
+                        } else if !c.complete_access {
+                            push(
+                                Severity::Warning,
+                                Some(i),
+                                format!("{}: start-up command {} writes a subindex the object does not have.", s.name, at),
+                            );
+                        }
+                    }
+                    Some((o, e)) => {
+                        if !e.writable() {
+                            push(
+                                Severity::Warning,
+                                Some(i),
+                                format!("{}: start-up command {} writes \"{}\", which is read-only.", s.name, at, o.entry_name(e)),
+                            );
+                        }
+                        if !c.complete_access && e.bit_size > 0 && e.bit_size <= 64 {
+                            let need = ((e.bit_size + 7) / 8) as usize;
+                            if c.data.len() != need {
+                                push(
+                                    Severity::Warning,
+                                    Some(i),
+                                    format!(
+                                        "{}: start-up command {} writes {} byte(s), but \"{}\" is {} ({} bit).",
+                                        s.name,
+                                        at,
+                                        c.data.len(),
+                                        o.entry_name(e),
+                                        e.data_type,
+                                        e.bit_size
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let has_assign = s.device.coe().map(|c| c.pdo_assign).unwrap_or(false);
         if !has_assign {
             let default = SlaveCfg::from_device(&s.device, 0);
@@ -1426,6 +1476,30 @@ mod tests {
         lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
         lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
         lib
+    }
+
+    #[test]
+    fn startup_values_checked_against_dictionary() {
+        let mut p = demo_project(&demo_lib());
+        let k = p.slaves.iter().position(|s| s.device.type_name == "SD200").unwrap();
+        let mut bad = |idx: u16, sub: u8, data: Vec<u8>| CoeInitCmd {
+            transition: "PS".into(),
+            index: idx,
+            subindex: sub,
+            data,
+            enabled: true,
+            ..Default::default()
+        };
+        p.slaves[k].coe_cmds.push(bad(0x6041, 0, vec![0, 0])); // read-only
+        p.slaves[k].coe_cmds.push(bad(0x6081, 0, vec![1, 0])); // UDINT given 2 bytes
+        p.slaves[k].coe_cmds.push(bad(0x2345, 0, vec![1])); // unknown object
+        let lay = compute_layout(&p);
+        let text: Vec<String> = validate(&p, &lay).into_iter().filter(|x| x.slave == Some(k)).map(|x| x.text).collect();
+        assert!(text.iter().any(|t| t.contains("6041:00") && t.contains("read-only")), "{:?}", text);
+        assert!(text.iter().any(|t| t.contains("6081:00") && t.contains("UDINT")));
+        assert!(text.iter().any(|t| t.contains("2345:00") && t.contains("not in the device")));
+        // the ESI's own start-up value (0x6060 = 8) is fine
+        assert!(!text.iter().any(|t| t.contains("6060:00")));
     }
 
     #[test]

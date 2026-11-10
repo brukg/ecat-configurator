@@ -239,6 +239,9 @@ pub struct EsiDevice {
     /// Modules that fit into this device's slots.
     #[serde(default)]
     pub modules: Vec<ModuleDef>,
+    /// CoE object dictionary (`Profile/Dictionary`), when the ESI provides one.
+    #[serde(default)]
+    pub dictionary: Vec<crate::od::OdObject>,
 }
 
 impl EsiDevice {
@@ -598,6 +601,10 @@ pub fn parse_esi(xml: &str, source: &str) -> Result<Vec<EsiDevice>, String> {
                 file_modules.iter().filter(|m| slots.iter().any(|s| s.accepts(m))).cloned().collect()
             },
             slots: parse_slots(d),
+            dictionary: child(d, "Profile")
+                .and_then(|p| child(p, "Dictionary"))
+                .map(crate::od::parse_dictionary)
+                .unwrap_or_default(),
         });
     }
     Ok(out)

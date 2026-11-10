@@ -4,6 +4,7 @@ use crate::eni;
 use crate::esi::*;
 use crate::export;
 use crate::model::*;
+use crate::od;
 use crate::scan::{self, ScanMsg, ScannedSlave};
 use crate::sii;
 use crate::util::*;
@@ -38,6 +39,7 @@ pub enum MasterTab {
 pub enum SlaveTab {
     General,
     Modules,
+    Dictionary,
     ProcessData,
     Mailbox,
     Dc,
@@ -231,6 +233,7 @@ fn slave_page_name(p: SlaveTab) -> &'static str {
     match p {
         SlaveTab::General => "General",
         SlaveTab::Modules => "Modules",
+        SlaveTab::Dictionary => "Dictionary",
         SlaveTab::ProcessData => "Process Data",
         SlaveTab::Mailbox => "Mailbox",
         SlaveTab::Dc => "DC",
@@ -242,6 +245,10 @@ fn slave_page_name(p: SlaveTab) -> &'static str {
 
 #[derive(Default)]
 struct CoeForm {
+    /// Value as typed (decimal / text); encoded with the dictionary type when known.
+    value: String,
+    /// Search text of the object picker.
+    pick: String,
     transition: String,
     index: String,
     sub: String,
@@ -303,6 +310,9 @@ pub struct App {
     deferred: Vec<Deferred>,
     focus_req: Option<Tab>,
     filter: String,
+    od_filter: String,
+    /// Scroll the start-up command form into view on the next draw.
+    coe_scroll: bool,
     log: Vec<(String, Severity, String)>,
     dirty: bool,
     eni_text: String,
@@ -354,6 +364,8 @@ impl App {
             deferred: Vec::new(),
             focus_req: None,
             filter: String::new(),
+            od_filter: String::new(),
+            coe_scroll: false,
             log: Vec::new(),
             dirty: false,
             eni_text: String::new(),
@@ -432,6 +444,12 @@ impl App {
                 }
                 "mailbox" => {
                     app.slave_tab = SlaveTab::Mailbox;
+                }
+                "dictionary" => {
+                    if let Some(k) = app.project.slaves.iter().position(|s| s.device.type_name == "SD200") {
+                        app.sel = Sel::Slave(k);
+                    }
+                    app.slave_tab = SlaveTab::Dictionary;
                 }
                 "modules" => {
                     if let Some(k) = app.project.slaves.iter().position(|s| !s.device.slots.is_empty()) {
@@ -950,6 +968,7 @@ impl App {
                         source_file: "scan".into(),
                         slots: vec![],
                         modules: vec![],
+                        dictionary: vec![],
                     }
                 }
             };
@@ -2634,6 +2653,7 @@ impl App {
             let has_mbx = s.has_mailbox();
             let has_dc = !s.device.dc_opmodes.is_empty();
             let has_slots = !s.device.slots.is_empty();
+            let has_dict = !s.device.dictionary.is_empty();
             for (t, l, en) in [
                 (SlaveTab::General, "General", true),
                 (SlaveTab::Modules, "Modules", has_slots),
@@ -2643,6 +2663,7 @@ impl App {
                 (SlaveTab::InitCmds, "Init Commands", true),
                 (SlaveTab::Eeprom, "EEPROM (SII)", true),
                 (SlaveTab::Esc, "ESC Registers", true),
+                (SlaveTab::Dictionary, "Object Dictionary", has_dict),
             ] {
                 if tab_button_en(ui, en, *page == t, l) {
                     *page = t;
@@ -2652,6 +2673,7 @@ impl App {
         if (*page == SlaveTab::Mailbox && !s.has_mailbox())
             || (*page == SlaveTab::Dc && s.device.dc_opmodes.is_empty())
             || (*page == SlaveTab::Modules && s.device.slots.is_empty())
+            || (*page == SlaveTab::Dictionary && s.device.dictionary.is_empty())
         {
             *page = SlaveTab::General;
         }
@@ -2659,24 +2681,107 @@ impl App {
         match *page {
             SlaveTab::General => self.slave_general(ui, i),
             SlaveTab::Modules => self.slave_modules(ui, i),
+            SlaveTab::Dictionary => self.slave_dictionary(ui, i, page),
             SlaveTab::ProcessData => self.slave_pd(ui, i, lay),
             SlaveTab::Mailbox => self.slave_mailbox(ui, i),
             SlaveTab::Dc => self.slave_dc(ui, i),
             SlaveTab::InitCmds => {
                 let cmds = slave_init_cmds(&self.project, lay, i);
                 let coe = slave_coe_cmds(&self.project, i);
+                let dict = self.project.slaves[i].device.dictionary.clone();
                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                     sub_header(ui, &format!("EtherCAT init commands ({})", cmds.len()));
                     init_cmd_grid(ui, "sinit", &cmds);
                     if !coe.is_empty() {
                         ui.add_space(8.0);
                         sub_header(ui, &format!("CoE init commands ({})", coe.len()));
-                        coe_grid_ro(ui, "coero", &coe);
+                        coe_grid_ro(ui, "coero", &coe, &dict);
                     }
                 });
             }
             SlaveTab::Eeprom => self.slave_eeprom(ui, i),
             SlaveTab::Esc => self.slave_esc(ui, i, lay),
+        }
+    }
+
+    /// The device's CoE object dictionary, with a shortcut to set start-up values.
+    fn slave_dictionary(&mut self, ui: &mut egui::Ui, i: usize, page: &mut SlaveTab) {
+        let dict = self.project.slaves[i].device.dictionary.clone();
+        let has_coe = self.project.slaves[i].device.coe().is_some();
+        ui.horizontal(|ui| {
+            ui.label("🔎");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.od_filter)
+                    .hint_text("Filter by index or name")
+                    .desired_width(280.0),
+            );
+            ui.label(RichText::new(format!("{} objects", dict.len())).weak());
+        });
+        let q = self.od_filter.to_lowercase();
+        let mut chosen: Option<(u16, u8, String, String)> = None;
+        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+            egui::Grid::new("odgrid").striped(true).num_columns(8).spacing([12.0, 3.0]).show(ui, |ui| {
+                for h in ["Index:Sub", "Name", "Type", "Bits", "Access", "PDO", "Default", ""] {
+                    ui.strong(h);
+                }
+                ui.end_row();
+                for o in dict.iter() {
+                    let hit = q.is_empty()
+                        || format!("{:04x}", o.index).contains(&q)
+                        || o.name.to_lowercase().contains(&q)
+                        || o.entries.iter().any(|e| e.name.to_lowercase().contains(&q));
+                    if !hit {
+                        continue;
+                    }
+                    if !o.is_simple() {
+                        ui.monospace(RichText::new(format!("{:04X}", o.index)).strong());
+                        ui.label(RichText::new(&o.name).strong());
+                        ui.label(&o.data_type);
+                        for _ in 0..5 {
+                            ui.label("");
+                        }
+                        ui.end_row();
+                    }
+                    for e in o.entries.iter() {
+                        if o.is_simple() {
+                            ui.monospace(format!("{:04X}:{:02X}", o.index, e.subindex));
+                            ui.label(&o.name);
+                        } else {
+                            ui.monospace(format!("    :{:02X}", e.subindex));
+                            ui.label(format!("    {}", e.name));
+                        }
+                        ui.label(&e.data_type);
+                        ui.label(e.bit_size.to_string());
+                        ui.label(if e.access.is_empty() { "–".to_string() } else { e.access.clone() });
+                        ui.label(if e.pdo_mapping.is_empty() { "–".to_string() } else { e.pdo_mapping.clone() });
+                        ui.monospace(od::decode_value(&e.default, &e.data_type));
+                        if has_coe && e.writable() && e.subindex != 0 || has_coe && e.writable() && o.is_simple() {
+                            if ui
+                                .small_button("Set at start-up…")
+                                .on_hover_text("Prepare a start-up SDO for this entry on the Mailbox / CoE page")
+                                .clicked()
+                            {
+                                chosen = Some((o.index, e.subindex, o.entry_name(e), od::decode_value(&e.default, &e.data_type)));
+                            }
+                        } else {
+                            ui.label("");
+                        }
+                        ui.end_row();
+                    }
+                }
+            });
+        });
+        if let Some((index, sub, name, value)) = chosen {
+            self.coe_form = CoeForm {
+                value,
+                transition: "PS".into(),
+                index: format!("{:04X}", index),
+                sub: sub.to_string(),
+                comment: name,
+                ..Default::default()
+            };
+            *page = SlaveTab::Mailbox;
+            self.coe_scroll = true;
         }
     }
 
@@ -3039,6 +3144,17 @@ impl App {
                 let editable = can_config && !s.pdos[k].pdo.fixed;
                 let user_pdo = s.device.rx_pdos.iter().chain(s.device.tx_pdos.iter()).all(|p| p.index != s.pdos[k].pdo.index);
                 let mut del_pdo = false;
+                let od_mappable: Vec<(u16, u8, u16, String, String)> = s
+                    .device
+                    .dictionary
+                    .iter()
+                    .flat_map(|o| {
+                        o.entries
+                            .iter()
+                            .filter(|e| e.mappable(!s.pdos[k].is_tx))
+                            .map(move |e| (o.index, e.subindex, e.bit_size, o.entry_name(e), e.data_type.clone()))
+                    })
+                    .collect();
                 let pc = &mut s.pdos[k];
                 sub_header(
                     ui,
@@ -3130,6 +3246,25 @@ impl App {
                             });
                             changed = true;
                         }
+                        if !od_mappable.is_empty() {
+                            egui::ComboBox::from_id_salt("odmap")
+                                .selected_text("➕ From dictionary…")
+                                .width(260.0)
+                                .show_ui(ui, |ui| {
+                                    for (idx, sub, bits, name, dt) in od_mappable.iter() {
+                                        if ui.selectable_label(false, format!("{:04X}:{:02X}  {}  ({})", idx, sub, name, dt)).clicked() {
+                                            pc.pdo.entries.push(PdoEntry {
+                                                index: *idx,
+                                                subindex: *sub,
+                                                bitlen: *bits,
+                                                name: name.clone(),
+                                                data_type: dt.clone(),
+                                            });
+                                            changed = true;
+                                        }
+                                    }
+                                });
+                        }
                         if ui.small_button("➕ Add gap").clicked() {
                             pc.pdo.entries.push(PdoEntry {
                                 index: 0,
@@ -3168,6 +3303,7 @@ impl App {
         let mut changed = false;
         let s = &mut self.project.slaves[i];
         let mb = s.device.mailbox.clone().unwrap_or_default();
+        let dict = s.device.dictionary.clone();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             sub_header(ui, "Mailbox");
             egui::Grid::new("mbx").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
@@ -3233,8 +3369,8 @@ impl App {
                 for c in generated.iter() {
                     ui.label("✔");
                     ui.label(&c.transition);
-                    ui.monospace(format!("{:04X}:{:02X}", c.index, c.subindex));
-                    ui.monospace(bytes_to_hex_spaced(&c.data));
+                    ui.monospace(od_index_label(&dict, c.index, c.subindex));
+                    ui.monospace(od_data_label(&dict, c));
                     ui.label(yn(c.complete_access));
                     ui.label(RichText::new(&c.comment).weak());
                     ui.label(RichText::new("generated").weak());
@@ -3245,8 +3381,8 @@ impl App {
                 for (k, c) in s.coe_cmds.iter_mut().enumerate() {
                     changed |= ui.checkbox(&mut c.enabled, "").changed();
                     ui.label(&c.transition);
-                    ui.monospace(format!("{:04X}:{:02X}", c.index, c.subindex));
-                    ui.monospace(bytes_to_hex_spaced(&c.data));
+                    ui.monospace(od_index_label(&dict, c.index, c.subindex));
+                    ui.monospace(od_data_label(&dict, c));
                     ui.label(yn(c.complete_access));
                     ui.label(&c.comment);
                     ui.label(if c.fixed { "ESI" } else { "user" });
@@ -3280,6 +3416,10 @@ impl App {
             if let Some(k) = edit {
                 let c = &s.coe_cmds[k];
                 self.coe_form = CoeForm {
+                    value: od::lookup(&dict, c.index, c.subindex)
+                        .map(|(_, e)| od::decode_value(&c.data, &e.data_type))
+                        .unwrap_or_default(),
+                    pick: String::new(),
                     transition: c.transition.clone(),
                     index: format!("{:04X}", c.index),
                     sub: c.subindex.to_string(),
@@ -3291,7 +3431,11 @@ impl App {
             }
             ui.add_space(8.0);
             let f = &mut self.coe_form;
-            sub_header(ui, if f.editing.is_some() { "Edit command" } else { "Add command" });
+            let hdr = sub_header_resp(ui, if f.editing.is_some() { "Edit command" } else { "Add command" });
+            if self.coe_scroll {
+                hdr.scroll_to_me(Some(egui::Align::Min));
+                self.coe_scroll = false;
+            }
             egui::Grid::new("coeform").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("Transition");
                 egui::ComboBox::from_id_salt("coetr").selected_text(f.transition.clone()).show_ui(ui, |ui| {
@@ -3306,7 +3450,67 @@ impl App {
                 ui.label("Subindex");
                 ui.add(egui::TextEdit::singleline(&mut f.sub).desired_width(80.0).hint_text("1"));
                 ui.end_row();
-                ui.label("Data (hex bytes, little endian)");
+                let idx_now = u16::from_str_radix(f.index.trim().trim_start_matches("0x").trim_start_matches("#x"), 16).ok();
+                let sub_now = parse_num(&f.sub).map(|v| v as u8);
+                let found = match (idx_now, sub_now) {
+                    (Some(a), Some(b)) => od::lookup(&dict, a, b),
+                    _ => None,
+                };
+                if !dict.is_empty() {
+                    ui.label("Object");
+                    let shown = found
+                        .map(|(o, e)| format!("{} ({}, {} bit)", o.entry_name(e), e.data_type, e.bit_size))
+                        .unwrap_or_else(|| "Pick from the object dictionary…".into());
+                    egui::ComboBox::from_id_salt("coeobj").selected_text(shown).width(380.0).show_ui(ui, |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut f.pick).hint_text("search index or name").desired_width(360.0));
+                        let q = f.pick.to_lowercase();
+                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                            for o in dict.iter() {
+                                for e in o.entries.iter().filter(|e| e.writable()) {
+                                    let label = format!("{:04X}:{:02X}  {}  ({})", o.index, e.subindex, o.entry_name(e), e.data_type);
+                                    if !q.is_empty() && !label.to_lowercase().contains(&q) {
+                                        continue;
+                                    }
+                                    if ui
+                                        .selectable_label(found.map(|(fo, fe)| fo.index == o.index && fe.subindex == e.subindex).unwrap_or(false), label)
+                                        .clicked()
+                                    {
+                                        f.index = format!("{:04X}", o.index);
+                                        f.sub = e.subindex.to_string();
+                                        f.value = od::decode_value(&e.default, &e.data_type);
+                                        f.data.clear();
+                                        if f.comment.is_empty() {
+                                            f.comment = o.entry_name(e);
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
+                    ui.end_row();
+                }
+                if let Some((_, e)) = found {
+                    ui.label(format!("Value ({})", e.data_type));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut f.value).desired_width(160.0).hint_text("e.g. 1000"));
+                        if !f.value.trim().is_empty() {
+                            match od::encode_value(&f.value, &e.data_type, e.bit_size) {
+                                Ok(b) => {
+                                    ui.label(RichText::new(format!("= {}", bytes_to_hex_spaced(&b))).monospace().weak());
+                                }
+                                Err(m) => {
+                                    ui.label(RichText::new(m).color(WARN));
+                                }
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
+                ui.label(if found.is_some() {
+                    "or raw data (hex, little endian)"
+                } else {
+                    "Data (hex bytes, little endian)"
+                });
                 ui.add(egui::TextEdit::singleline(&mut f.data).desired_width(240.0).hint_text("e8 03"));
                 ui.end_row();
                 ui.label("Comment");
@@ -3318,7 +3522,14 @@ impl App {
             });
             let idx = u16::from_str_radix(f.index.trim().trim_start_matches("0x").trim_start_matches("#x"), 16).ok();
             let sub = parse_num(&f.sub).map(|v| v as u8);
-            let data = hex_to_bytes(&f.data);
+            let od_e = match (idx, sub) {
+                (Some(a), Some(b)) => od::lookup(&dict, a, b).map(|(_, e)| e.clone()),
+                _ => None,
+            };
+            let data = match &od_e {
+                Some(e) if !f.value.trim().is_empty() => od::encode_value(&f.value, &e.data_type, e.bit_size).unwrap_or_default(),
+                _ => hex_to_bytes(&f.data),
+            };
             let ok = idx.is_some() && sub.is_some() && !data.is_empty();
             ui.horizontal(|ui| {
                 let label = if f.editing.is_some() { "✔ Apply" } else { "➕ Add" };
@@ -3356,7 +3567,7 @@ impl App {
                     };
                 }
                 if !ok {
-                    ui.label(RichText::new("Enter index, subindex and at least one data byte").weak());
+                    ui.label(RichText::new("Enter index, subindex and a value (or at least one data byte)").weak());
                 }
             });
         });
@@ -3649,6 +3860,10 @@ fn title(ui: &mut egui::Ui, t: &str, sub: &str) {
     ui.add_space(4.0);
 }
 
+fn sub_header_resp(ui: &mut egui::Ui, t: &str) -> egui::Response {
+    ui.label(RichText::new(t).strong().color(ACCENT))
+}
+
 fn sub_header(ui: &mut egui::Ui, t: &str) {
     ui.label(RichText::new(t).strong().color(ACCENT));
 }
@@ -3730,7 +3945,31 @@ fn init_cmd_grid(ui: &mut egui::Ui, id: &str, cmds: &[EcInitCmd]) {
     });
 }
 
-fn coe_grid_ro(ui: &mut egui::Ui, id: &str, cmds: &[CoeInitCmd]) {
+/// "6060:00  Modes of operation" when the dictionary knows the object.
+fn od_index_label(dict: &[od::OdObject], index: u16, sub: u8) -> String {
+    match od::lookup(dict, index, sub) {
+        Some((o, e)) => format!("{:04X}:{:02X}  {}", index, sub, o.entry_name(e)),
+        None => format!("{:04X}:{:02X}", index, sub),
+    }
+}
+
+/// "8  (08)" — the value in the object's type plus the raw bytes.
+fn od_data_label(dict: &[od::OdObject], c: &CoeInitCmd) -> String {
+    let hex = bytes_to_hex_spaced(&c.data);
+    match od::lookup(dict, c.index, c.subindex) {
+        Some((_, e)) if !c.complete_access => {
+            let v = od::decode_value(&c.data, &e.data_type);
+            if v == hex {
+                hex
+            } else {
+                format!("{}  ({})", v, hex)
+            }
+        }
+        _ => hex,
+    }
+}
+
+fn coe_grid_ro(ui: &mut egui::Ui, id: &str, cmds: &[CoeInitCmd], dict: &[od::OdObject]) {
     egui::Grid::new(id).striped(true).num_columns(5).spacing([12.0, 3.0]).show(ui, |ui| {
         for h in ["Transition", "Index:Sub", "Data", "CA", "Comment"] {
             ui.strong(h);
@@ -3738,8 +3977,8 @@ fn coe_grid_ro(ui: &mut egui::Ui, id: &str, cmds: &[CoeInitCmd]) {
         ui.end_row();
         for c in cmds {
             ui.label(&c.transition);
-            ui.monospace(format!("{:04X}:{:02X}", c.index, c.subindex));
-            ui.monospace(bytes_to_hex_spaced(&c.data));
+            ui.monospace(od_index_label(dict, c.index, c.subindex));
+            ui.monospace(od_data_label(dict, c));
             ui.label(yn(c.complete_access));
             ui.label(&c.comment);
             ui.end_row();

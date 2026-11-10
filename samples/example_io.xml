@@ -106,6 +106,27 @@
             <InitCmd><Transition>PS</Transition><Index>#x8000</Index><SubIndex>6</SubIndex><Data>01</Data><Comment>Ch.1 enable filter</Comment></InitCmd>
           </CoE>
         </Mailbox>
+        <Profile>
+          <ChannelCount>4</ChannelCount>
+          <Dictionary>
+            <DataTypes>
+              <DataType><Name>BOOL</Name><BitSize>1</BitSize></DataType>
+              <DataType><Name>USINT</Name><BitSize>8</BitSize></DataType>
+              <DataType><Name>UINT</Name><BitSize>16</BitSize></DataType>
+              <DataType><Name>INT</Name><BitSize>16</BitSize></DataType>
+              <DataType><Name>DT8000</Name><BitSize>48</BitSize>
+                <SubItem><SubIdx>0</SubIdx><Name>SubIndex 000</Name><Type>USINT</Type><BitSize>8</BitSize><BitOffs>0</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+                <SubItem><SubIdx>1</SubIdx><Name>Enable user scale</Name><Type>BOOL</Type><BitSize>1</BitSize><BitOffs>16</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+                <SubItem><SubIdx>6</SubIdx><Name>Enable filter</Name><Type>BOOL</Type><BitSize>1</BitSize><BitOffs>21</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+                <SubItem><SubIdx>21</SubIdx><Name>Filter settings</Name><Type>UINT</Type><BitSize>16</BitSize><BitOffs>32</BitOffs><Flags><Access>rw</Access></Flags></SubItem>
+              </DataType>
+            </DataTypes>
+            <Objects>
+              <Object><Index>#x6000</Index><Name>AI Inputs Ch.1</Name><Type>INT</Type><BitSize>16</BitSize><Flags><Access>ro</Access><PdoMapping>T</PdoMapping></Flags></Object>
+              <Object><Index>#x8000</Index><Name>AI Settings Ch.1</Name><Type>DT8000</Type><BitSize>48</BitSize><Info><SubItem><Name>SubIndex 000</Name><Info><DefaultData>15</DefaultData></Info></SubItem><SubItem><Name>Enable user scale</Name><Info><DefaultData>00</DefaultData></Info></SubItem><SubItem><Name>Enable filter</Name><Info><DefaultData>00</DefaultData></Info></SubItem><SubItem><Name>Filter settings</Name><Info><DefaultData>0000</DefaultData></Info></SubItem></Info><Flags><Access>rw</Access></Flags></Object>
+            </Objects>
+          </Dictionary>
+        </Profile>
         <Dc>
           <OpMode><Name>FreeRun</Name><Desc>FreeRun/SM-Synchron</Desc><AssignActivate>#x0</AssignActivate></OpMode>
           <OpMode><Name>DcSync</Name><Desc>DC-Synchron (input based)</Desc><AssignActivate>#x700</AssignActivate><CycleTimeSync0 Factor="1">0</CycleTimeSync0><ShiftTimeSync0>0</ShiftTimeSync0><CycleTimeSync1 Factor="0">0</CycleTimeSync1><ShiftTimeSync1>0</ShiftTimeSync1></OpMode>
