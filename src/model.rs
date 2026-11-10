@@ -53,6 +53,16 @@ pub struct MasterCfg {
     pub dc_enabled: bool,
     /// Index of the slave used as DC reference clock (None = first DC slave).
     pub ref_clock: Option<usize>,
+    /// Map each slave's "mailbox in full" bit into a logical area read every cycle,
+    /// so the master does not have to poll every mailbox (ENI MailboxStates).
+    #[serde(default)]
+    pub mbx_state_polling: bool,
+    #[serde(default = "default_mbx_state_start")]
+    pub mbx_state_start: u32,
+}
+
+fn default_mbx_state_start() -> u32 {
+    0x0900_0000
 }
 
 impl Default for MasterCfg {
@@ -73,6 +83,8 @@ impl Default for MasterCfg {
             timeout_mailbox_ms: 3000,
             dc_enabled: true,
             ref_clock: None,
+            mbx_state_polling: false,
+            mbx_state_start: default_mbx_state_start(),
         }
     }
 }
@@ -651,6 +663,8 @@ pub struct FmmuLayout {
     /// 1 = read (inputs), 2 = write (outputs)
     pub dir: u8,
     pub sm: u8,
+    /// Maps the mailbox state bit (0x080D bit 3) instead of process data.
+    pub mbx_state: bool,
 }
 
 impl FmmuLayout {
@@ -694,6 +708,8 @@ pub struct SlaveLayout {
     pub in_offs: u32,
     pub out_bits: u32,
     pub in_bits: u32,
+    /// Bit offset of this slave's mailbox state bit in the MailboxStates area.
+    pub mbx_state_bit: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -706,6 +722,9 @@ pub struct NetLayout {
     pub vars: Vec<Variable>,
     pub n_out_slaves: u16,
     pub n_in_slaves: u16,
+    /// Slaves whose mailbox state is mapped, and the bytes of that area.
+    pub mbx_state_count: u32,
+    pub mbx_state_bytes: u32,
 }
 
 impl NetLayout {
@@ -864,6 +883,23 @@ pub fn cyclic_frames(p: &Project, lay: &NetLayout) -> Vec<CyclicFrame> {
     if let Some(f) = frames.last_mut() {
         f.cmds.push(brd);
     }
+    if lay.mbx_state_bytes > 0 {
+        let c = CyclicCmd {
+            cmd: CMD_LRD,
+            addr: p.master.mbx_state_start,
+            len: lay.mbx_state_bytes,
+            wkc: lay.mbx_state_count.min(0xFFFF) as u16,
+            in_offs: total + 2,
+            out_offs: 0,
+            comment: "mailbox states".into(),
+        };
+        if frames.last().map(|f| f.bytes() + 12 + c.len > budget).unwrap_or(false) {
+            frames.push(CyclicFrame::default());
+        }
+        if let Some(f) = frames.last_mut() {
+            f.cmds.push(c);
+        }
+    }
     frames
 }
 
@@ -959,6 +995,7 @@ pub fn compute_layout(p: &Project) -> NetLayout {
                 phys_start_bit: 0,
                 dir: if is_out { 2 } else { 1 },
                 sm: sm.index,
+                mbx_state: false,
             });
             let mut bit = if is_out { img_byte * 8 } else { (lay.out_size + img_byte) * 8 };
             for pidx in sm.pdos.iter() {
@@ -986,6 +1023,23 @@ pub fn compute_layout(p: &Project) -> NetLayout {
             } else {
                 ii += sm.len as u32;
             }
+        }
+        if p.master.mbx_state_polling && s.has_mailbox() && s.device.fmmus.iter().any(|f| f == "MBoxState") {
+            let k = lay.mbx_state_count;
+            sl.fmmus.push(FmmuLayout {
+                log_start: p.master.mbx_state_start.wrapping_add(k / 8),
+                len: 1,
+                log_start_bit: (k % 8) as u8,
+                log_end_bit: (k % 8) as u8,
+                phys_start: 0x080D,
+                phys_start_bit: 3,
+                dir: 1,
+                sm: 1,
+                mbx_state: true,
+            });
+            sl.mbx_state_bit = Some(k);
+            lay.mbx_state_count += 1;
+            lay.mbx_state_bytes = (lay.mbx_state_count + 7) / 8;
         }
         if sl.out_bytes > 0 {
             lay.n_out_slaves += 1;
@@ -1191,7 +1245,13 @@ pub fn slave_init_cmds(p: &Project, lay: &NetLayout, i: usize) -> Vec<EcInitCmd>
         ));
     }
     for (k, f) in sl.fmmus.iter().enumerate() {
-        let nm = if f.dir == 2 { "outputs" } else { "inputs" };
+        let nm = if f.mbx_state {
+            "mailbox state"
+        } else if f.dir == 2 {
+            "outputs"
+        } else {
+            "inputs"
+        };
         v.push(ic(&["PS"], &format!("set fmmu {} ({})", k, nm), CMD_FPWR, a, 0x0600 + 16 * k as u16, f.bytes()));
     }
     if p.master.dc_enabled && s.dc_active() {
@@ -1694,6 +1754,19 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
             push(Severity::Error, Some(i), format!("{}: SYNC0 cycle time is 0.", s.name));
         }
     }
+    if p.master.mbx_state_polling {
+        let with_mbx = p.slaves.iter().filter(|s| s.has_mailbox()).count() as u32;
+        if lay.mbx_state_count < with_mbx {
+            push(
+                Severity::Info,
+                None,
+                format!(
+                    "Mailbox state polling covers {} of {} mailbox slaves; the others have no MBoxState FMMU in their ESI and are polled one by one.",
+                    lay.mbx_state_count, with_mbx
+                ),
+            );
+        }
+    }
     if let Some(r) = p.master.ref_clock {
         if let Some(s) = p.slaves.get(r) {
             if s.device.dc_opmodes.is_empty() {
@@ -1850,6 +1923,37 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("2345:00") && t.contains("not in the device")));
         // the ESI's own start-up value (0x6060 = 8) is fine
         assert!(!text.iter().any(|t| t.contains("6060:00")));
+    }
+
+    #[test]
+    fn mailbox_states_get_fmmu_and_cyclic_read() {
+        let mut p = demo_project(&demo_lib());
+        p.master.mbx_state_polling = true;
+        let lay = compute_layout(&p);
+        // AI4, two SD200 and MIO8 list an MBoxState FMMU
+        assert_eq!(lay.mbx_state_count, 4);
+        assert_eq!(lay.mbx_state_bytes, 1);
+        let k = p.slaves.iter().position(|s| s.device.type_name == "SD200").unwrap();
+        let f = lay.slaves[k].fmmus.iter().find(|f| f.mbx_state).unwrap();
+        assert_eq!((f.phys_start, f.phys_start_bit, f.len), (0x080D, 3, 1));
+        let frames = cyclic_frames(&p, &lay);
+        let last = frames.last().unwrap().cmds.last().unwrap();
+        assert_eq!((last.cmd, last.addr, last.len, last.wkc), (CMD_LRD, 0x0900_0000, 1, 4));
+        let cmds = slave_init_cmds(&p, &lay, k);
+        assert!(cmds.iter().any(|c| c.comment.contains("mailbox state")));
+        let xml = crate::eni::export_eni(&p);
+        assert!(xml.contains("<MailboxStates>") && xml.contains("<StatusBitAddr>"));
+        let (q, _) = crate::eni::import_eni(&xml, &demo_lib()).unwrap();
+        assert!(q.master.mbx_state_polling);
+        assert_eq!(crate::eni::export_eni(&q), xml);
+        // LWR/LRD mode with the mailbox area below the process data
+        p.master.use_lrw = false;
+        p.master.mbx_state_start = 0x0000_1000;
+        let xml = crate::eni::export_eni(&p);
+        let (q, _) = crate::eni::import_eni(&xml, &demo_lib()).unwrap();
+        assert_eq!(q.master.log_start, p.master.log_start);
+        assert_eq!(q.master.max_frame_data, p.master.max_frame_data);
+        assert_eq!(crate::eni::export_eni(&q), xml);
     }
 
     #[test]

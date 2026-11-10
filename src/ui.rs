@@ -2771,6 +2771,19 @@ impl App {
                     )
                     .changed();
                 ui.end_row();
+                ui.label("Mailbox state polling");
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .checkbox(&mut m.mbx_state_polling, "read all \"mailbox full\" bits every cycle, at")
+                        .on_hover_text("Each slave with an MBoxState FMMU maps register 0x080D bit 3 into this logical area (ENI MailboxStates)")
+                        .changed();
+                    ui.add_enabled_ui(m.mbx_state_polling, |ui| {
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut m.mbx_state_start).hexadecimal(8, false, true).prefix("0x"))
+                            .changed();
+                    });
+                });
+                ui.end_row();
             });
             ui.add_space(8.0);
             sub_header(ui, "State machine timeouts");

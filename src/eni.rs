@@ -128,6 +128,12 @@ pub fn export_eni(p: &Project) -> String {
     x.leaf("Source", mac_hex(&p.master.src_mac));
     x.leaf("EtherType", bytes_to_hex(&p.master.ether_type.to_be_bytes()));
     x.close("Info");
+    if lay.mbx_state_bytes > 0 {
+        x.open("MailboxStates");
+        x.leaf("StartAddr", p.master.mbx_state_start);
+        x.leaf("Count", lay.mbx_state_bytes);
+        x.close("MailboxStates");
+    }
     x.open("InitCmds");
     for c in master_init_cmds(p) {
         write_init_cmd(&mut x, &c);
@@ -204,6 +210,9 @@ pub fn export_eni(p: &Project) -> String {
                 x.leaf("Start", o.start);
                 x.leaf("Length", o.len);
                 x.leaf("PollTime", 20);
+                if let Some(b) = sl.mbx_state_bit {
+                    x.leaf("StatusBitAddr", b);
+                }
                 x.close("Recv");
             }
             for pr in mb.protocols() {
@@ -361,7 +370,7 @@ pub fn export_eni(p: &Project) -> String {
     // ---- process image
     x.open("ProcessImage");
     x.open("Inputs");
-    x.leaf("ByteSize", total + 2);
+    x.leaf("ByteSize", total + 2 + lay.mbx_state_bytes);
     for v in lay.vars.iter().filter(|v| v.is_input) {
         write_var(&mut x, v);
     }
@@ -466,6 +475,13 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
     let mut notes = Vec::new();
     let mut p = Project::default();
     if let Some(m) = child(cfg, "Master") {
+        if let Some(ms) = child(m, "MailboxStates") {
+            p.master.mbx_state_polling = true;
+            let a = num(child(ms, "StartAddr"));
+            if a > 0 {
+                p.master.mbx_state_start = a.clamp(0, u32::MAX as i64) as u32;
+            }
+        }
         if let Some(info) = child(m, "Info") {
             p.master.name = txt(child(info, "Name"));
             let fmt_mac = |h: String| {
@@ -507,12 +523,15 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                 acc.saturating_add(12)
                     .saturating_add(num(child(cmd, "DataLength")).clamp(0, u32::MAX as i64) as u32)
             }));
-            pd_cmds += kids(f, "Cmd")
-                .filter(|cmd| matches!(num(child(*cmd, "Cmd")) as u8, CMD_LRW | CMD_LWR | CMD_LRD))
-                .count();
+            // the mailbox state read is not process data
+            let is_pd = |cmd: roxmltree::Node| {
+                matches!(num(child(cmd, "Cmd")) as u8, CMD_LRW | CMD_LWR | CMD_LRD)
+                    && !(p.master.mbx_state_polling && num(child(cmd, "Addr")) as u32 == p.master.mbx_state_start)
+            };
+            pd_cmds += kids(f, "Cmd").filter(|cmd| is_pd(*cmd)).count();
             for cmd in kids(f, "Cmd") {
                 let code = num(child(cmd, "Cmd")) as u8;
-                if matches!(code, CMD_LRW | CMD_LWR | CMD_LRD) {
+                if is_pd(cmd) {
                     if code == CMD_LRW {
                         lrw = true;
                     }
