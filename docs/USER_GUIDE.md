@@ -312,6 +312,29 @@ Exporting an ENI, importing it again and exporting once more gives an identical 
 
 The scan is available on Linux and needs `CAP_NET_RAW`; see the README.
 
+### Commissioning a single slave
+
+![Commissioning](images/commissioning.png)
+
+On the same page, pick a slave by its position on the bus (from the scan, or from
+the configuration when you have not scanned):
+
+- **Status & error counters** reads the AL state and AL status code (shown as text,
+  e.g. *0x001B sync manager watchdog*) and the per-port error counters: invalid
+  frames, RX errors, forwarded RX errors and lost links, plus processing-unit and
+  PDI errors.
+- **State: INIT / PREOP / BOOT** requests that state and reports the slave's answer.
+  SAFEOP and OP need cyclic process data from a running master, so they are not
+  offered here.
+- **EEPROM: Read** reads the whole EEPROM, and **Save as .bin…** stores it.
+  **Write image of the configured slave…** writes the EEPROM content generated from
+  the ESI of the configured slave at that position; **Write from file…** writes a
+  `.bin`. Writing always asks for confirmation. Power-cycle the slave afterwards.
+- **CoE SDO** reads an object (index:subindex) or writes hex bytes to it. The
+  configurator sets up the slave's standard mailbox from its EEPROM and switches it
+  to PREOP first. Expedited and normal transfers are supported; objects larger than
+  one mailbox (segmented transfer) are not yet.
+
 ## Keyboard shortcuts
 
 | Keys | Action |

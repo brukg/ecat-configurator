@@ -20,9 +20,10 @@ whether a generated ENI works on real hardware at all.
    against access and size. Still open: `AlternativeSmMapping`, multi-channel
    profiles (e.g. several CiA 402 axes), external dictionary files and all
    InitCmd variants.
-5. **Online commissioning.** Switch slave states (INIT/PREOP/SAFEOP/OP), browse
-   and edit the object dictionary over SDO, read and write slave EEPROM, show AL
-   status codes and error counters, and measure DC propagation delays.
+5. **Online commissioning.** ~~INIT/PREOP/BOOT, AL status codes, error counters,
+   EEPROM read/write, SDO read/write~~ done in 0.10 (frame encoding unit-tested;
+   not yet tried on real hardware here). Still open: SAFEOP/OP with cyclic data,
+   segmented SDO, browsing the dictionary online (SDO info), DC delay measurement.
 6. **Other mailbox protocols in the ENI.** ~~SoE start-up IDNs and EoE IP
    settings~~ done in 0.7. Still open: FoE firmware download, mailbox polling
    configuration (`MailboxStates`), and checking the EoE/SoE byte layout against

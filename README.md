@@ -37,7 +37,8 @@ ENI network information file (ETG.2100) for your EtherCAT master.
 - **Embedded targets:** process image as a C header or CSV, and slave EEPROM (SII)
   images as `.bin` or Intel HEX.
 - **Online:** scan a real bus on Linux and compare it with the configuration, or
-  create a configuration from the scan.
+  create a configuration from the scan. Commission single slaves: INIT/PREOP/BOOT,
+  AL status code and error counters, CoE SDO read/write, EEPROM read and write.
 - **Validation:** address clashes, conflicting PDOs, sync manager sizes, frame
   size, DC settings and more.
 - **Hot connect:** mark groups of slaves that may be missing or plugged in while
