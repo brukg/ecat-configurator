@@ -231,6 +231,32 @@ pub fn modules_from_idents(dev: &EsiDevice, idents: &[u32]) -> Vec<ModuleInst> {
     v
 }
 
+/// Assign exactly the PDOs of a predefined assignment (mandatory PDOs stay assigned).
+pub fn apply_sm_mapping(pdos: &mut [PdoCfg], m: &SmMapping) {
+    for pc in pdos.iter_mut() {
+        match m.sms.iter().find(|(_, list)| list.contains(&pc.pdo.index)) {
+            Some((sm, _)) => {
+                pc.assigned = true;
+                pc.sm = *sm;
+            }
+            None => pc.assigned = pc.pdo.mandatory,
+        }
+    }
+}
+
+/// The predefined assignment the slave's current PDO choice matches, if any.
+pub fn current_sm_mapping(s: &SlaveCfg) -> Option<usize> {
+    s.device.sm_mappings.iter().position(|m| {
+        s.pdos.iter().all(|pc| {
+            let want = m.sms.iter().find(|(_, l)| l.contains(&pc.pdo.index));
+            match want {
+                Some((sm, _)) => pc.assigned && pc.sm == *sm,
+                None => !pc.assigned || pc.pdo.mandatory,
+            }
+        })
+    })
+}
+
 /// PDO configuration of a device with the given modules, using the ESI default assignment rules.
 pub fn build_pdo_cfgs(dev: &EsiDevice, modules: &[ModuleInst]) -> Vec<PdoCfg> {
     let mut rx = dev.rx_pdos.clone();
@@ -337,7 +363,10 @@ pub fn port_letter(p: u8) -> char {
 impl SlaveCfg {
     pub fn from_device(dev: &EsiDevice, phys: u16) -> SlaveCfg {
         let modules = default_modules(dev);
-        let pdos = build_pdo_cfgs(dev, &modules);
+        let mut pdos = build_pdo_cfgs(dev, &modules);
+        if let Some(m) = dev.sm_mappings.iter().find(|m| m.default) {
+            apply_sm_mapping(&mut pdos, m);
+        }
         let mbx_size = |kind: SmKind| {
             dev.sms
                 .iter()
@@ -2097,6 +2126,36 @@ mod tests {
         assert_eq!(crate::eni::export_eni(&q), xml);
         let lay = compute_layout(&p);
         assert!(!validate(&p, &lay).iter().any(|x| x.sev == Severity::Error));
+    }
+
+    #[test]
+    fn predefined_assignments_and_external_dictionary() {
+        let dir = std::env::temp_dir().join(format!("ecat-esi-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let esi = SAMPLE_DRIVE
+            .replace(
+                "<Mailbox DataLinkLayer=\"true\">",
+                "<AlternativeSmMapping Default=\"1\"><Name>CSV</Name><Sm No=\"2\"><Pdo>#x1601</Pdo></Sm><Sm No=\"3\"><Pdo>#x1A01</Pdo></Sm></AlternativeSmMapping><AlternativeSmMapping><Name>CSP</Name><Sm No=\"2\"><Pdo>#x1600</Pdo></Sm><Sm No=\"3\"><Pdo>#x1A00</Pdo></Sm></AlternativeSmMapping><Mailbox DataLinkLayer=\"true\">",
+            );
+        let start = esi.find("<Dictionary>").unwrap();
+        let end = esi.find("</Dictionary>").unwrap() + "</Dictionary>".len();
+        let dict = format!("<?xml version=\"1.0\"?><EtherCATDict>{}</EtherCATDict>", &esi[start..end]);
+        let esi = format!("{}<DictionaryFile>drive_dict.xml</DictionaryFile>{}", &esi[..start], &esi[end..]);
+        std::fs::write(dir.join("drive.xml"), &esi).unwrap();
+        std::fs::write(dir.join("drive_dict.xml"), dict).unwrap();
+        let mut lib = EsiLibrary::default();
+        lib.add_file(&dir.join("drive.xml")).unwrap();
+        let d = &lib.devices[0];
+        assert!(d.dictionary.iter().any(|o| o.index == 0x6060), "dictionary from the separate file");
+        assert_eq!(d.sm_mappings.len(), 2);
+        let mut s = SlaveCfg::from_device(d, 1001);
+        let on: Vec<u16> = s.pdos.iter().filter(|p| p.assigned).map(|p| p.pdo.index).collect();
+        assert_eq!(on, vec![0x1601, 0x1A01]);
+        assert_eq!(current_sm_mapping(&s), Some(0));
+        let csp = s.device.sm_mappings[1].clone();
+        apply_sm_mapping(&mut s.pdos, &csp);
+        assert_eq!(current_sm_mapping(&s), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

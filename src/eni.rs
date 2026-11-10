@@ -774,6 +774,7 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
                     slots: vec![],
                     modules: vec![],
                     dictionary: vec![],
+                    sm_mappings: vec![],
                 }
             }
         };

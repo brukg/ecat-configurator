@@ -1447,6 +1447,7 @@ impl App {
                         slots: vec![],
                         modules: vec![],
                         dictionary: vec![],
+                        sm_mappings: vec![],
                     }
                 }
             };
@@ -3739,6 +3740,23 @@ impl App {
                         .changed();
                 }
             });
+            if !s.device.sm_mappings.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("Predefined PDO assignment");
+                    let cur = current_sm_mapping(s);
+                    let shown = cur.map(|k| s.device.sm_mappings[k].name.clone()).unwrap_or_else(|| "(custom)".into());
+                    let maps = s.device.sm_mappings.clone();
+                    egui::ComboBox::from_id_salt("smmap").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                        for (k, m) in maps.iter().enumerate() {
+                            let label = if m.default { format!("{} (default)", m.name) } else { m.name.clone() };
+                            if ui.selectable_label(cur == Some(k), label).clicked() {
+                                apply_sm_mapping(&mut s.pdos, m);
+                                changed = true;
+                            }
+                        }
+                    });
+                });
+            }
             let sm_list: Vec<(u8, SmKind)> = s.device.sms.iter().enumerate().map(|(k, x)| (k as u8, x.kind)).collect();
             // side by side when there is room, stacked in narrow panes
             let narrow = ui.available_width() < 900.0;

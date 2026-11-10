@@ -242,6 +242,77 @@ pub struct EsiDevice {
     /// CoE object dictionary (`Profile/Dictionary`), when the ESI provides one.
     #[serde(default)]
     pub dictionary: Vec<crate::od::OdObject>,
+    /// Predefined PDO assignments (`AlternativeSmMapping`).
+    #[serde(default)]
+    pub sm_mappings: Vec<SmMapping>,
+}
+
+/// A predefined PDO assignment: which PDOs go into which sync manager.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SmMapping {
+    pub name: String,
+    pub default: bool,
+    pub sms: Vec<(u8, Vec<u16>)>,
+}
+
+fn parse_sm_mappings(d: roxmltree::Node) -> Vec<SmMapping> {
+    children(d, "AlternativeSmMapping")
+        .map(|m| SmMapping {
+            name: {
+                let n = name_of(m);
+                if n.is_empty() {
+                    "Predefined assignment".into()
+                } else {
+                    n
+                }
+            },
+            default: m.attribute("Default").map(parse_bool).unwrap_or(false),
+            sms: children(m, "Sm")
+                .map(|sm| {
+                    (
+                        sm.attribute("No").and_then(parse_num).unwrap_or(0) as u8,
+                        children(sm, "Pdo").map(|p| parse_u32(p.text().unwrap_or("")) as u16).collect(),
+                    )
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// `Profile/Dictionary`, or a dictionary in the file named by `Profile/DictionaryFile`
+/// (looked up next to the ESI file).
+fn device_dictionary(d: roxmltree::Node, source: &str) -> Vec<crate::od::OdObject> {
+    let prof = match child(d, "Profile") {
+        Some(p) => p,
+        None => return vec![],
+    };
+    if let Some(dict) = child(prof, "Dictionary") {
+        return crate::od::parse_dictionary(dict);
+    }
+    let file = text_of(child(prof, "DictionaryFile"));
+    if file.is_empty() {
+        return vec![];
+    }
+    let base = std::path::Path::new(source).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let path = base.join(file.replace('\\', "/"));
+    let text = match std::fs::read(&path) {
+        Ok(b) => decode_text(&b),
+        Err(_) => return vec![],
+    };
+    let doc = match roxmltree::Document::parse_with_options(
+        &text,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    ) {
+        Ok(d) => d,
+        Err(_) => return vec![],
+    };
+    doc.descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "Dictionary")
+        .map(crate::od::parse_dictionary)
+        .unwrap_or_default()
 }
 
 impl EsiDevice {
@@ -601,10 +672,8 @@ pub fn parse_esi(xml: &str, source: &str) -> Result<Vec<EsiDevice>, String> {
                 file_modules.iter().filter(|m| slots.iter().any(|s| s.accepts(m))).cloned().collect()
             },
             slots: parse_slots(d),
-            dictionary: child(d, "Profile")
-                .and_then(|p| child(p, "Dictionary"))
-                .map(crate::od::parse_dictionary)
-                .unwrap_or_default(),
+            dictionary: device_dictionary(d, source),
+            sm_mappings: parse_sm_mappings(d),
         });
     }
     Ok(out)

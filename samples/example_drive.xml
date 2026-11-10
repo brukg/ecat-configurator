@@ -90,6 +90,16 @@
           <Entry><Index>#x6061</Index><SubIndex>0</SubIndex><BitLen>8</BitLen><Name>Modes of operation display</Name><DataType>SINT</DataType></Entry>
           <Entry><Index>#x0</Index><BitLen>8</BitLen></Entry>
         </TxPdo>
+        <AlternativeSmMapping Default="1">
+          <Name>Cyclic synchronous position (CSP)</Name>
+          <Sm No="2"><Pdo>#x1600</Pdo></Sm>
+          <Sm No="3"><Pdo>#x1A00</Pdo></Sm>
+        </AlternativeSmMapping>
+        <AlternativeSmMapping>
+          <Name>Cyclic synchronous velocity (CSV)</Name>
+          <Sm No="2"><Pdo>#x1601</Pdo></Sm>
+          <Sm No="3"><Pdo>#x1A01</Pdo></Sm>
+        </AlternativeSmMapping>
         <Mailbox DataLinkLayer="true">
           <CoE SdoInfo="true" PdoAssign="true" PdoConfig="true" CompleteAccess="true" SegmentedSdo="true">
             <InitCmd><Transition>PS</Transition><Index>#x6060</Index><SubIndex>0</SubIndex><Data>08</Data><Comment>Modes of operation: CSP</Comment></InitCmd>
