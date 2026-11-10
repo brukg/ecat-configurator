@@ -2,6 +2,12 @@
 name = "ecat-configurator"
 version = "0.1.0"
 edition = "2021"
+description = "Desktop EtherCAT network configurator: ESI device descriptions in, ENI network files out"
+license = "MIT"
+repository = "https://github.com/brukg/ecat-configurator"
+readme = "README.md"
+keywords = ["ethercat", "eni", "esi", "fieldbus", "automation"]
+categories = ["science::robotics", "gui"]
 
 [[bin]]
 name = "ecat-configurator"

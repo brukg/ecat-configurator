@@ -33,11 +33,13 @@ install -m 0644 samples/*.xml "$STAGE/usr/share/$NAME/samples/"
 cat > "$STAGE/usr/share/doc/$NAME/copyright" <<COPY
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: $NAME
+Source: https://github.com/brukg/ecat-configurator
+
 Files: *
-Copyright: $(date +%Y) the $NAME authors
-License: proprietary
- All rights reserved.
+Copyright: 2026 Bruk Gebregziabher
+License: MIT
 COPY
+sed -e 's/^$/./' -e 's/^/ /' LICENSE | tail -n +4 >> "$STAGE/usr/share/doc/$NAME/copyright"
 gzip -9n -c > "$STAGE/usr/share/doc/$NAME/changelog.gz" <<LOG
 $NAME ($VERSION) stable; urgency=medium
 
@@ -63,6 +65,7 @@ cat > "$STAGE/DEBIAN/control" <<CTRL
 Package: $NAME
 Version: $VERSION
 Section: devel
+Homepage: https://github.com/brukg/ecat-configurator
 Priority: optional
 Architecture: $ARCH
 Maintainer: $MAINTAINER
