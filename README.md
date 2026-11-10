@@ -40,6 +40,9 @@ ENI network information file (ETG.2100) for your EtherCAT master.
   create a configuration from the scan.
 - **Validation:** address clashes, conflicting PDOs, sync manager sizes, frame
   size, DC settings and more.
+- **Hot connect:** mark groups of slaves that may be missing or plugged in while
+  running; they are identified by the head's station alias (also written into the
+  generated EEPROM image).
 - **Undo/redo and copy/paste:** per-document undo history (Ctrl+Z / Ctrl+Y). Cut, copy,
   paste and duplicate slaves, also between documents and between running copies.
 - **Documents:** open several ENI or project files at the same time. Each one is

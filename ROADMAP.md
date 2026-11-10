@@ -30,7 +30,9 @@ whether a generated ENI works on real hardware at all.
 7. ~~**Correct topology handling for junctions.**~~ Done in 0.6: bus order and
    auto-increment addresses from the port wiring (D, B, C), automatic re-sorting,
    port-conflict and order checks, and wiring rebuilt from a scan.
-8. **Hot-connect groups and cable redundancy.**
+8. **Hot-connect groups and cable redundancy.** ~~Hot-connect groups~~ done in
+   0.9 (group size, station alias identification, ENI HotConnect, checks, alias
+   in the EEPROM image). Still open: cable redundancy (second master port).
 9. ~~**Undo/redo and copy/paste.**~~ Done in 0.5: per-document undo history and
    cut/copy/paste/duplicate of slaves with all their settings (also between
    documents and program instances). Still open: copying only a PDO mapping or

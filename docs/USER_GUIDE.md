@@ -144,6 +144,22 @@ multi-axis drives.
 - ENI import reads the module list back from 0xF030 and rebuilds the slots, so a
   modular configuration survives export and re-import.
 
+### Hot connect (on the General page)
+![Hot connect](images/hot-connect.png)
+
+Tick *This slave starts a hot-connect group* on the first slave of a part of the
+network that may be missing at start-up or plugged in while running (a tool
+changer, an optional module). Set the **group size** (this slave and the ones that
+follow it in the list) and the **station alias** the master uses to recognise the
+group. The alias is read from register 0x0012, which the slave loads from EEPROM
+word 4. *EEPROM (SII) › Generate from ESI* writes this alias into the image.
+
+The ENI gets a `HotConnect` element with the member count and an identify command
+that reads and checks the alias. Validation reports groups that overlap, run past
+the end of the network, have alias 0 or share an alias, and warns when the DC
+reference clock sits inside a group. The tree marks group heads with
+`[hot connect ×n]`.
+
 ### Process Data
 - **Sync managers:** start address, size (computed from the assigned PDOs),
   control byte and the assigned PDOs.
