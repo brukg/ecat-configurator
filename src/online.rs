@@ -13,8 +13,21 @@ pub enum Request {
     SetState(u8),
     ReadEeprom,
     WriteEeprom(Vec<u8>),
-    SdoUpload { index: u16, sub: u8 },
-    SdoDownload { index: u16, sub: u8, data: Vec<u8> },
+    SdoUpload {
+        index: u16,
+        sub: u8,
+    },
+    SdoDownload {
+        index: u16,
+        sub: u8,
+        data: Vec<u8>,
+    },
+    /// Firmware download over FoE in BOOT state (bootstrap mailbox).
+    FoeWrite {
+        file_name: String,
+        password: u32,
+        data: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -33,6 +46,7 @@ pub enum Reply {
     Written(usize),
     Sdo(Vec<u8>),
     SdoWritten,
+    FoeWritten(usize),
 }
 
 pub enum OnlineMsg {
@@ -127,6 +141,70 @@ pub fn sdo_abort_text(code: u32) -> &'static str {
 }
 
 const MBX_COE: u8 = 3;
+const MBX_FOE: u8 = 4;
+
+/// FoE packet in a mailbox: header (6 bytes) + op code + reserved + rest.
+fn foe_mailbox(counter: u8, op: u8, word: u32, rest: &[u8]) -> Vec<u8> {
+    let mut m = Vec::with_capacity(12 + rest.len());
+    m.extend_from_slice(&((6 + rest.len()) as u16).to_le_bytes());
+    m.extend_from_slice(&0u16.to_le_bytes());
+    m.push(0);
+    m.push(MBX_FOE | ((counter & 7) << 4));
+    m.push(op);
+    m.push(0);
+    m.extend_from_slice(&word.to_le_bytes());
+    m.extend_from_slice(rest);
+    m
+}
+
+/// FoE write request (WRQ) with password and file name.
+pub fn foe_write_request(counter: u8, password: u32, file_name: &str) -> Vec<u8> {
+    foe_mailbox(counter, 2, password, file_name.as_bytes())
+}
+
+/// FoE data packet `no` (counting from 1).
+pub fn foe_data(counter: u8, no: u32, data: &[u8]) -> Vec<u8> {
+    foe_mailbox(counter, 3, no, data)
+}
+
+/// Data bytes that fit in one FoE packet for a mailbox of `mbx_len` bytes.
+pub fn foe_chunk(mbx_len: u16) -> usize {
+    (mbx_len as usize).saturating_sub(12).max(1)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FoeAnswer {
+    Ack(u32),
+    Busy { done: u16, entire: u16 },
+    Error(String),
+}
+
+pub fn parse_foe(m: &[u8]) -> Result<FoeAnswer, String> {
+    if m.len() < 12 {
+        return Err("FoE answer too short".into());
+    }
+    if m[5] & 0x0F != MBX_FOE {
+        return Err(format!("unexpected mailbox type {} (expected FoE)", m[5] & 0x0F));
+    }
+    let len = (u16::from_le_bytes([m[0], m[1]]) as usize).min(m.len() - 6);
+    let w = u32::from_le_bytes([m[8], m[9], m[10], m[11]]);
+    match m[6] {
+        4 => Ok(FoeAnswer::Ack(w)),
+        5 => {
+            let text = String::from_utf8_lossy(&m[12..(6 + len).max(12)]).trim_end_matches('\0').to_string();
+            Ok(FoeAnswer::Error(format!(
+                "FoE error {:#x}{}",
+                w,
+                if text.is_empty() { String::new() } else { format!(": {}", text) }
+            )))
+        }
+        6 => Ok(FoeAnswer::Busy {
+            done: u16::from_le_bytes([m[8], m[9]]),
+            entire: u16::from_le_bytes([m[10], m[11]]),
+        }),
+        op => Err(format!("unexpected FoE op code {}", op)),
+    }
+}
 const COE_SDO_REQUEST: u16 = 2 << 12;
 
 fn mailbox(counter: u8, coe_payload: &[u8]) -> Vec<u8> {
@@ -341,6 +419,72 @@ fn run(adapter: &str, pos: u16, req: Request, tx: &std::sync::mpsc::Sender<Onlin
             }
             Ok(Reply::Written(data.len()))
         }
+        Request::FoeWrite { file_name, password, data } => {
+            // bootstrap mailbox from the EEPROM (words 0x14..0x17), then BOOT
+            let a = sii_read(&mut s, 0x14)?;
+            let b = sii_read(&mut s, 0x16)?;
+            let (out_start, out_len) = (u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([a[2], a[3]]));
+            let (in_start, in_len) = (u16::from_le_bytes([b[0], b[1]]), u16::from_le_bytes([b[2], b[3]]));
+            if out_len < 16 || in_len < 16 {
+                return Err("the slave has no bootstrap mailbox in its EEPROM (no FoE firmware update)".into());
+            }
+            state_req(&mut s, 1)?;
+            wr(&mut s, 0x0800, &crate::model::sm_bytes(out_start, out_len, 0x26, true))?;
+            wr(&mut s, 0x0808, &crate::model::sm_bytes(in_start, in_len, 0x22, true))?;
+            state_req(&mut s, 3)?;
+            let mbx = |s: &mut Sock, m: Vec<u8>, counter: &mut u8| -> Result<FoeAnswer, String> {
+                *counter = if *counter >= 7 { 1 } else { *counter + 1 };
+                let mut m = m;
+                m[5] = (m[5] & 0x0F) | (*counter << 4);
+                m.resize(out_len as usize, 0);
+                wr(s, out_start, &m)?;
+                let t = Instant::now();
+                loop {
+                    let st = rd(s, 0x080D, 1)?;
+                    if st[0] & 0x08 != 0 {
+                        break;
+                    }
+                    if t.elapsed() > Duration::from_secs(10) {
+                        return Err("no FoE answer from the slave (timeout)".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                parse_foe(&rd(s, in_start, in_len as usize)?)
+            };
+            let mut counter = 0u8;
+            let chunk = foe_chunk(out_len);
+            match mbx(&mut s, foe_write_request(0, password, &file_name), &mut counter)? {
+                FoeAnswer::Ack(_) => {}
+                FoeAnswer::Error(e) => return Err(e),
+                FoeAnswer::Busy { .. } => {}
+            }
+            let mut no = 1u32;
+            let mut sent = 0usize;
+            loop {
+                let end = (sent + chunk).min(data.len());
+                let part = &data[sent..end];
+                loop {
+                    match mbx(&mut s, foe_data(0, no, part), &mut counter)? {
+                        FoeAnswer::Ack(_) => break,
+                        FoeAnswer::Busy { done, entire } => {
+                            let _ = tx.send(OnlineMsg::Progress(format!("slave busy ({} of {})", done, entire)));
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        FoeAnswer::Error(e) => return Err(e),
+                    }
+                }
+                sent = end;
+                if no % 16 == 0 {
+                    let _ = tx.send(OnlineMsg::Progress(format!("firmware {} of {} bytes", sent, data.len())));
+                }
+                // a packet shorter than the chunk ends the transfer (an empty one if it divides evenly)
+                if part.len() < chunk {
+                    break;
+                }
+                no += 1;
+            }
+            Ok(Reply::FoeWritten(data.len()))
+        }
         Request::SdoUpload { .. } | Request::SdoDownload { .. } => {
             // standard mailbox from the slave's EEPROM (words 0x18..0x1B), then PREOP
             let a = sii_read(&mut s, 0x18)?;
@@ -422,5 +566,20 @@ mod tests {
         resp = vec![10, 0, 0, 0, 0, 0x13, 0x00, 0x30, 0x60, 0x81, 0x60, 0x00, 0, 0, 0, 0];
         assert!(parse_sdo_response(&resp).unwrap().is_empty());
         assert_eq!(al_code_text(0x001B), "sync manager watchdog");
+        // FoE
+        let w = foe_write_request(1, 0x1234, "fw.efw");
+        assert_eq!(&w[..12], &[12, 0, 0, 0, 0, 0x14, 2, 0, 0x34, 0x12, 0, 0]);
+        assert_eq!(&w[12..], b"fw.efw");
+        let d = foe_data(2, 3, &[9, 9]);
+        assert_eq!((d[6], d[8], d.len()), (3, 3, 14));
+        assert_eq!(foe_chunk(128), 116);
+        assert_eq!(parse_foe(&[6, 0, 0, 0, 0, 0x14, 4, 0, 5, 0, 0, 0]).unwrap(), FoeAnswer::Ack(5));
+        assert_eq!(
+            parse_foe(&[6, 0, 0, 0, 0, 0x14, 6, 0, 3, 0, 10, 0]).unwrap(),
+            FoeAnswer::Busy { done: 3, entire: 10 }
+        );
+        let mut e = vec![10, 0, 0, 0, 0, 0x14, 5, 0, 0x02, 0x80, 0, 0];
+        e.extend_from_slice(b"bad!");
+        assert_eq!(parse_foe(&e).unwrap(), FoeAnswer::Error("FoE error 0x8002: bad!".into()));
     }
 }

@@ -271,6 +271,9 @@ struct OnlineUi {
     sdo_value: String,
     sdo_result: String,
     confirm_write: Option<(u16, Vec<u8>, String)>,
+    foe_name: String,
+    foe_password: String,
+    confirm_foe: Option<(u16, Vec<u8>, String)>,
 }
 
 /// Entry form for SoE start-up writes.
@@ -1162,6 +1165,7 @@ impl App {
                             self.online.sdo_result = bytes_to_hex_spaced(&d);
                             self.info(&format!("Online: SDO read {}", self.online.sdo_result));
                         }
+                        Ok(Reply::FoeWritten(n)) => self.info(&format!("Online: firmware of {} bytes downloaded; restart the slave", n)),
                         Ok(Reply::SdoWritten) => {
                             self.online.sdo_result = "written".into();
                             self.info("Online: SDO written");
@@ -1342,6 +1346,32 @@ impl App {
             if !self.online.sdo_result.is_empty() {
                 ui.label(RichText::new(format!("→ {}", self.online.sdo_result)).monospace());
             }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Firmware (FoE):");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.online.foe_name)
+                    .desired_width(150.0)
+                    .hint_text("file name on the slave"),
+            );
+            ui.label("password");
+            ui.add(egui::TextEdit::singleline(&mut self.online.foe_password).desired_width(80.0).hint_text("0"));
+            ui.add_enabled_ui(!busy, |ui| {
+                if ui.button("Download firmware file…").clicked() {
+                    if let Some(f) = rfd::FileDialog::new().set_title("Firmware file").pick_file() {
+                        match std::fs::read(&f) {
+                            Ok(b) if !b.is_empty() => {
+                                if self.online.foe_name.trim().is_empty() {
+                                    self.online.foe_name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                                }
+                                self.online.confirm_foe = Some((self.online.pos, b, f.display().to_string()));
+                            }
+                            Ok(_) => self.warn("The firmware file is empty"),
+                            Err(e) => self.err(&format!("Cannot read {}: {}", f.display(), e)),
+                        }
+                    }
+                }
+            });
         });
         ui.label(
             RichText::new("Uses the adapter above. SDO access sets up the slave's standard mailbox from its EEPROM and switches it to PREOP. Needs Linux and the CAP_NET_RAW capability.")
@@ -4761,6 +4791,51 @@ impl App {
         self.poll_online();
         if self.online.rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // firmware download needs an explicit yes
+        if let Some((pos, img, src)) = self.online.confirm_foe.clone() {
+            let mut go = false;
+            let mut cancel = false;
+            egui::Window::new("Download firmware")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Send {} ({} bytes) as \"{}\" to the slave at position {}? The slave is switched to BOOT.",
+                        src,
+                        img.len(),
+                        self.online.foe_name.trim(),
+                        pos
+                    ));
+                    ui.label(RichText::new("Interrupting the download or a wrong file can leave the slave without working firmware.").color(WARN));
+                    ui.horizontal(|ui| {
+                        if ui.button("Download").clicked() {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            if go {
+                self.online.confirm_foe = None;
+                self.online.pos = pos;
+                let password = parse_num(if self.online.foe_password.trim().is_empty() {
+                    "0"
+                } else {
+                    self.online.foe_password.trim()
+                })
+                .unwrap_or(0) as u32;
+                let req = crate::online::Request::FoeWrite {
+                    file_name: self.online.foe_name.trim().to_string(),
+                    password,
+                    data: img,
+                };
+                self.online_start(req, "downloading firmware");
+            } else if cancel {
+                self.online.confirm_foe = None;
+            }
         }
         // EEPROM write needs an explicit yes
         if let Some((pos, img, src)) = self.online.confirm_write.clone() {
