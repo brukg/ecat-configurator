@@ -539,6 +539,8 @@ pub struct NetLayout {
 }
 
 impl NetLayout {
+    /// Working counter of a single LRW over the whole image (reference value for tests).
+    #[cfg(test)]
     pub fn lrw_wkc(&self) -> u16 {
         // per slave: +2 for a successful write, +1 for a successful read
         self.slaves
@@ -546,6 +548,163 @@ impl NetLayout {
             .map(|s| (if s.out_bytes > 0 { 2 } else { 0 }) + (if s.in_bytes > 0 { 1 } else { 0 }))
             .sum()
     }
+}
+
+// ---------------------------------------------------------------- cyclic frames
+
+/// Largest Ethernet payload; an EtherCAT frame is 2 header bytes plus datagrams of 12 + data bytes.
+pub const ETH_PAYLOAD: u32 = 1500;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CyclicCmd {
+    pub cmd: u8,
+    /// Logical address (LRW/LRD/LWR); for BRD the low/high words are ADP/ADO.
+    pub addr: u32,
+    pub len: u32,
+    pub wkc: u16,
+    /// Byte offsets in the input and output images (image offset = logical address - start).
+    pub in_offs: u32,
+    pub out_offs: u32,
+    pub comment: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CyclicFrame {
+    pub cmds: Vec<CyclicCmd>,
+}
+
+impl CyclicFrame {
+    /// Bytes of the EtherCAT part of the frame (header + datagrams).
+    pub fn bytes(&self) -> u32 {
+        2 + self.cmds.iter().map(|c| 12 + c.len).sum::<u32>()
+    }
+    /// Time on a 100 Mbit/s wire incl. Ethernet header, FCS, preamble and gap, in µs.
+    pub fn wire_us(&self) -> f32 {
+        ((self.bytes().max(46) + 14 + 4 + 8 + 12) * 8) as f32 / 100.0
+    }
+}
+
+/// Split the image range [start, end) into pieces of at most `limit` bytes,
+/// cutting at slave (FMMU) boundaries where possible.
+fn split_range(start: u32, end: u32, limit: u32, cuts: &[u32]) -> Vec<(u32, u32)> {
+    let mut v = Vec::new();
+    let mut a = start;
+    let limit = limit.max(1);
+    while a < end {
+        let max_b = (a + limit).min(end);
+        let b = if max_b == end {
+            end
+        } else {
+            cuts.iter().copied().filter(|c| *c > a && *c <= max_b).max().unwrap_or(max_b)
+        };
+        v.push((a, b));
+        a = b;
+    }
+    v
+}
+
+/// Expected working counter of a logical command over image range [a, b).
+fn range_wkc(lay: &NetLayout, cmd: u8, a: u32, b: u32) -> u16 {
+    let mut w = 0u16;
+    for sl in lay.slaves.iter() {
+        let hit = |dir: u8| {
+            sl.fmmus.iter().any(|f| {
+                let fs = f.log_start.wrapping_sub(lay.out_log);
+                let fe = fs + f.len as u32;
+                f.dir == dir && fs < b && fe > a
+            })
+        };
+        let (o, i) = (hit(2), hit(1));
+        w += match cmd {
+            CMD_LRW => (if o { 2 } else { 0 }) + (if i { 1 } else { 0 }),
+            CMD_LWR => o as u16,
+            CMD_LRD => i as u16,
+            _ => 0,
+        };
+    }
+    w
+}
+
+/// The cyclic frames sent every cycle: process data split to fit the frame size,
+/// packed into as few frames as possible, plus a BRD of the AL status.
+pub fn cyclic_frames(p: &Project, lay: &NetLayout) -> Vec<CyclicFrame> {
+    let limit = p.master.max_frame_data.clamp(16, ETH_PAYLOAD - 14);
+    let total = lay.out_size + lay.in_size;
+    let mut cuts: Vec<u32> = Vec::new();
+    for sl in lay.slaves.iter() {
+        for f in sl.fmmus.iter() {
+            let fs = f.log_start.wrapping_sub(lay.out_log);
+            cuts.push(fs);
+            cuts.push(fs + f.len as u32);
+        }
+    }
+    cuts.push(lay.out_size);
+    let mut pieces: Vec<(u8, u32, u32, &str)> = Vec::new();
+    if total > 0 {
+        if p.master.use_lrw {
+            for (a, b) in split_range(0, total, limit, &cuts) {
+                pieces.push((CMD_LRW, a, b, "process data (LRW)"));
+            }
+        } else {
+            for (a, b) in split_range(0, lay.out_size, limit, &cuts) {
+                pieces.push((CMD_LWR, a, b, "outputs (LWR)"));
+            }
+            for (a, b) in split_range(lay.out_size, total, limit, &cuts) {
+                pieces.push((CMD_LRD, a, b, "inputs (LRD)"));
+            }
+        }
+    }
+    let n_parts = pieces.len();
+    let budget = limit + 14;
+    let mut frames: Vec<CyclicFrame> = vec![CyclicFrame::default()];
+    for (k, (cmd, a, b, what)) in pieces.into_iter().enumerate() {
+        let c = CyclicCmd {
+            cmd,
+            addr: lay.out_log.wrapping_add(a),
+            len: b - a,
+            wkc: range_wkc(lay, cmd, a, b),
+            in_offs: if cmd == CMD_LWR { 0 } else { a },
+            out_offs: if cmd == CMD_LRD { 0 } else { a },
+            comment: if n_parts > 1 {
+                format!("{} part {} of {}", what, k + 1, n_parts)
+            } else {
+                what.to_string()
+            },
+        };
+        let need_new = frames.last().map(|f| !f.cmds.is_empty() && f.bytes() + 12 + c.len > budget).unwrap_or(false);
+        if need_new {
+            frames.push(CyclicFrame::default());
+        }
+        if let Some(f) = frames.last_mut() {
+            f.cmds.push(c);
+        }
+    }
+    let brd = CyclicCmd {
+        cmd: CMD_BRD,
+        addr: 0x0130u32 << 16,
+        len: 2,
+        wkc: p.slaves.len() as u16,
+        in_offs: total,
+        out_offs: 0,
+        comment: "read AL status".into(),
+    };
+    if frames.last().map(|f| f.bytes() + 14 > budget).unwrap_or(false) {
+        frames.push(CyclicFrame::default());
+    }
+    if let Some(f) = frames.last_mut() {
+        f.cmds.push(brd);
+    }
+    frames
+}
+
+/// Sum of the expected working counters of all process data commands.
+pub fn process_data_wkc(frames: &[CyclicFrame]) -> u32 {
+    frames
+        .iter()
+        .flat_map(|f| f.cmds.iter())
+        .filter(|c| c.cmd != CMD_BRD)
+        .map(|c| c.wkc as u32)
+        .sum()
 }
 
 pub fn sm_bytes(start: u16, len: u16, control: u8, enable: bool) -> Vec<u8> {
@@ -1031,18 +1190,29 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
     if p.master.cycle_time_us == 0 {
         push(Severity::Error, None, "Cycle time must be greater than 0.".into());
     }
-    let total = if p.master.use_lrw {
-        lay.out_size + lay.in_size
-    } else {
-        lay.out_size.max(lay.in_size)
-    };
-    if total > p.master.max_frame_data {
+    let frames = cyclic_frames(p, lay);
+    if frames.len() > 1 {
         push(
-            Severity::Error,
+            Severity::Info,
             None,
             format!(
-                "Process data ({} bytes) does not fit into one frame ({} bytes max).",
-                total, p.master.max_frame_data
+                "Process data ({} bytes) is sent in {} frames per cycle ({} bytes per frame at most).",
+                lay.out_size + lay.in_size,
+                frames.len(),
+                p.master.max_frame_data
+            ),
+        );
+    }
+    let wire: f32 = frames.iter().map(|f| f.wire_us()).sum();
+    if p.master.cycle_time_us > 0 && wire > p.master.cycle_time_us as f32 * 0.5 {
+        push(
+            Severity::Warning,
+            None,
+            format!(
+                "The cyclic frames need {:.0} µs on the wire, {:.0}% of the {} µs cycle; use a longer cycle time.",
+                wire,
+                wire * 100.0 / p.master.cycle_time_us as f32,
+                p.master.cycle_time_us
             ),
         );
     }
@@ -1210,7 +1380,7 @@ pub fn validate(p: &Project, lay: &NetLayout) -> Vec<Issue> {
             }
         }
     }
-    if v.is_empty() {
+    if v.iter().all(|i| i.sev == Severity::Info) {
         v.push(Issue {
             sev: Severity::Info,
             slave: None,
@@ -1250,6 +1420,73 @@ pub fn demo_project(lib: &EsiLibrary) -> Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn demo_lib() -> EsiLibrary {
+        let mut lib = EsiLibrary::default();
+        lib.add_xml(SAMPLE_IO, "io").unwrap();
+        lib.add_xml(SAMPLE_DRIVE, "drv").unwrap();
+        lib.add_xml(SAMPLE_MODULAR, "mod").unwrap();
+        lib
+    }
+
+    #[test]
+    fn small_image_is_one_frame() {
+        let p = demo_project(&demo_lib());
+        let lay = compute_layout(&p);
+        let f = cyclic_frames(&p, &lay);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].cmds.len(), 2);
+        assert_eq!(f[0].cmds[0].len, lay.out_size + lay.in_size);
+        assert_eq!(f[0].cmds[0].wkc, lay.lrw_wkc());
+    }
+
+    #[test]
+    fn large_image_is_split_and_covered() {
+        for lrw in [true, false] {
+            let mut p = demo_project(&demo_lib());
+            p.master.max_frame_data = 20;
+            p.master.use_lrw = lrw;
+            let lay = compute_layout(&p);
+            let frames = cyclic_frames(&p, &lay);
+            assert!(frames.len() > 1);
+            let cmds: Vec<&CyclicCmd> = frames.iter().flat_map(|f| f.cmds.iter()).filter(|c| c.cmd != CMD_BRD).collect();
+            // contiguous, no gaps or overlaps, each piece within the limit
+            let mut next = lay.out_log;
+            for c in cmds.iter() {
+                assert_eq!(c.addr, next);
+                assert!(c.len <= 20 && c.len > 0);
+                next += c.len;
+            }
+            assert_eq!(next, lay.out_log + lay.out_size + lay.in_size);
+            for f in frames.iter() {
+                assert!(f.bytes() <= 20 + 14, "frame of {} bytes", f.bytes());
+            }
+            // every slave with process data is counted by at least one command
+            let w = process_data_wkc(&frames);
+            let min = if lrw {
+                lay.lrw_wkc() as u32
+            } else {
+                (lay.n_out_slaves + lay.n_in_slaves) as u32
+            };
+            assert!(w >= min);
+        }
+    }
+
+    #[test]
+    fn split_frames_round_trip_through_eni() {
+        let lib = demo_lib();
+        for limit in [20u32, 24, 40, 64] {
+            let mut p = demo_project(&lib);
+            p.master.max_frame_data = limit;
+            let xml = crate::eni::export_eni(&p);
+            assert!(xml.matches("<Frame>").count() > 1);
+            if let Ok(dir) = std::env::var("ECAT_DUMP_SPLIT_ENI") {
+                std::fs::write(format!("{}/split_{}.xml", dir, limit), &xml).unwrap();
+            }
+            let (q, _) = crate::eni::import_eni(&xml, &lib).unwrap();
+            assert_eq!(crate::eni::export_eni(&q), xml, "limit {}", limit);
+        }
+    }
+
     #[test]
     fn modules_shift_pdos_and_objects() {
         let d = parse_esi(SAMPLE_MODULAR, "m").unwrap().remove(0);

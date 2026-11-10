@@ -35,14 +35,31 @@ pub fn c_header(p: &Project, lay: &NetLayout) -> String {
     s.push_str(&format!("#define ECAT_OUTPUT_BYTES       {}u\n", lay.out_size));
     s.push_str(&format!("#define ECAT_INPUT_OFFSET       {}u\n", lay.out_size));
     s.push_str(&format!("#define ECAT_INPUT_BYTES        {}u\n", lay.in_size));
+    let frames = cyclic_frames(p, lay);
     s.push_str(&format!(
-        "#define ECAT_EXPECTED_WKC       {}u\n\n",
-        if p.master.use_lrw {
-            lay.lrw_wkc()
-        } else {
-            lay.n_out_slaves + lay.n_in_slaves
-        }
+        "#define ECAT_EXPECTED_WKC       {}u /* sum over all process data commands */\n",
+        process_data_wkc(&frames)
     ));
+    s.push_str(&format!("#define ECAT_FRAME_COUNT        {}u\n", frames.len()));
+    let mut k = 0;
+    for (fi, f) in frames.iter().enumerate() {
+        for c in f.cmds.iter().filter(|c| c.cmd != CMD_BRD) {
+            s.push_str(&format!(
+                "#define ECAT_CMD{}_FRAME {}u /* {} */\n#define ECAT_CMD{}_ADDR  0x{:08X}u\n#define ECAT_CMD{}_LEN   {}u\n#define ECAT_CMD{}_WKC   {}u\n",
+                k,
+                fi,
+                cmd_name(c.cmd),
+                k,
+                c.addr,
+                k,
+                c.len,
+                k,
+                c.wkc
+            ));
+            k += 1;
+        }
+    }
+    s.push('\n');
     for (dir, inp) in [("Outputs", false), ("Inputs", true)] {
         s.push_str(&format!("/* ---- {} ---- */\n", dir));
         for v in lay.vars.iter().filter(|v| v.is_input == inp) {

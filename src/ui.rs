@@ -1932,14 +1932,12 @@ impl App {
             ui.separator();
             ui.label(format!("Cycle: {} µs", p.master.cycle_time_us));
             ui.separator();
-            ui.label(format!(
-                "Expected WKC: {}",
-                if p.master.use_lrw {
-                    lay.lrw_wkc()
-                } else {
-                    lay.n_out_slaves + lay.n_in_slaves
-                }
-            ));
+            let frames = cyclic_frames(p, lay);
+            ui.label(format!("Expected WKC: {}", process_data_wkc(&frames)));
+            if frames.len() > 1 {
+                ui.separator();
+                ui.label(format!("Frames: {}", frames.len()));
+            }
             ui.separator();
             ui.label(format!("Catalog: {} devices", self.lib.devices.len()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2175,7 +2173,13 @@ impl App {
             egui::Grid::new("mcyc").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
                 ui.label("Cycle time");
                 changed |= ui
-                    .add(egui::DragValue::new(&mut m.cycle_time_us).range(50..=1_000_000).suffix(" µs").speed(10))
+                    .add(
+                        egui::DragValue::new(&mut m.cycle_time_us)
+                            .range(50..=1_000_000)
+                            .clamp_existing_to_range(false)
+                            .suffix(" µs")
+                            .speed(10),
+                    )
                     .changed();
                 ui.end_row();
                 ui.label("Frame commands");
@@ -2190,7 +2194,14 @@ impl App {
                     .changed();
                 ui.end_row();
                 ui.label("Max. data per frame");
-                changed |= ui.add(egui::DragValue::new(&mut m.max_frame_data).range(64..=1486).suffix(" bytes")).changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut m.max_frame_data)
+                            .range(16..=1486)
+                            .clamp_existing_to_range(false)
+                            .suffix(" bytes"),
+                    )
+                    .changed();
                 ui.end_row();
             });
             ui.add_space(8.0);
@@ -2203,7 +2214,9 @@ impl App {
                     ("Mailbox (SDO)", &mut m.timeout_mailbox_ms),
                 ] {
                     ui.label(l);
-                    changed |= ui.add(egui::DragValue::new(v).range(10..=600_000).suffix(" ms")).changed();
+                    changed |= ui
+                        .add(egui::DragValue::new(v).range(10..=600_000).clamp_existing_to_range(false).suffix(" ms"))
+                        .changed();
                     ui.end_row();
                 }
             });
@@ -2216,10 +2229,7 @@ impl App {
                     ("Output image", format!("{} bytes at {}", lay.out_size, hx(lay.out_log, 8))),
                     ("Input image", format!("{} bytes at {}", lay.in_size, hx(lay.in_log, 8))),
                     ("Slaves with outputs / inputs", format!("{} / {}", lay.n_out_slaves, lay.n_in_slaves)),
-                    (
-                        "Expected working counter",
-                        format!("{}", if m.use_lrw { lay.lrw_wkc() } else { lay.n_out_slaves + lay.n_in_slaves }),
-                    ),
+                    ("Expected working counter", format!("{}", process_data_wkc(&cyclic_frames(&self.project, lay)))),
                     ("Process variables", format!("{}", lay.vars.len())),
                 ],
             );
@@ -2318,56 +2328,57 @@ impl App {
 
     fn master_cyclic(&mut self, ui: &mut egui::Ui, lay: &NetLayout) {
         let p = &self.project;
-        let total = lay.out_size + lay.in_size;
-        sub_header(ui, &format!("Frame 1 — cycle {} µs", p.master.cycle_time_us));
-        egui::Grid::new("cyc").striped(true).num_columns(7).spacing([16.0, 4.0]).show(ui, |ui| {
-            for h in ["Cmd", "Address", "Length", "Expected WKC", "Input offs", "Output offs", "Comment"] {
-                ui.strong(h);
-            }
-            ui.end_row();
-            let row = |ui: &mut egui::Ui, c: &str, a: String, l: u32, w: u16, io: u32, oo: String, cm: &str| {
-                ui.monospace(c);
-                ui.monospace(a);
-                ui.label(l.to_string());
-                ui.label(w.to_string());
-                ui.label(io.to_string());
-                ui.label(oo);
-                ui.label(cm);
-                ui.end_row();
-            };
-            if total > 0 {
-                if p.master.use_lrw {
-                    row(ui, "LRW", hx(lay.out_log, 8), total, lay.lrw_wkc(), 0, "0".into(), "process data");
-                } else {
-                    if lay.out_size > 0 {
-                        row(ui, "LWR", hx(lay.out_log, 8), lay.out_size, lay.n_out_slaves, 0, "0".into(), "outputs");
-                    }
-                    if lay.in_size > 0 {
-                        row(ui, "LRD", hx(lay.in_log, 8), lay.in_size, lay.n_in_slaves, lay.out_size, "–".into(), "inputs");
-                    }
+        let frames = cyclic_frames(p, lay);
+        let wire: f32 = frames.iter().map(|f| f.wire_us()).sum();
+        ui.label(format!(
+            "{} frame(s) per {} µs cycle · {:.0} µs on the wire ({:.0}% bus load) · up to {} data bytes per frame (change on the General page)",
+            frames.len(),
+            p.master.cycle_time_us,
+            wire,
+            if p.master.cycle_time_us > 0 {
+                wire * 100.0 / p.master.cycle_time_us as f32
+            } else {
+                0.0
+            },
+            p.master.max_frame_data
+        ));
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .id_salt("cycfr")
+            .max_height(ui.available_height() * 0.55)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (fi, f) in frames.iter().enumerate() {
+                    sub_header(ui, &format!("Frame {} — {} of {} bytes", fi + 1, f.bytes(), ETH_PAYLOAD));
+                    egui::Grid::new(("cyc", fi)).striped(true).num_columns(7).spacing([16.0, 4.0]).show(ui, |ui| {
+                        for h in ["Cmd", "Address", "Length", "Expected WKC", "Input offs", "Output offs", "Comment"] {
+                            ui.strong(h);
+                        }
+                        ui.end_row();
+                        for c in f.cmds.iter() {
+                            ui.monospace(cmd_name(c.cmd));
+                            if c.cmd == CMD_BRD {
+                                ui.monospace(format!("{:#06x}:{:#06x}", c.addr & 0xFFFF, c.addr >> 16));
+                            } else {
+                                ui.monospace(hx(c.addr, 8));
+                            }
+                            ui.label(c.len.to_string());
+                            ui.label(c.wkc.to_string());
+                            ui.label(c.in_offs.to_string());
+                            ui.label(if c.cmd == CMD_BRD { "–".to_string() } else { c.out_offs.to_string() });
+                            ui.label(&c.comment);
+                            ui.end_row();
+                        }
+                    });
+                    ui.add(
+                        egui::ProgressBar::new((f.bytes() as f32 / ETH_PAYLOAD as f32).min(1.0))
+                            .text(format!("{} of {} bytes", f.bytes(), ETH_PAYLOAD))
+                            .desired_width(400.0),
+                    );
+                    ui.add_space(8.0);
                 }
-            }
-            row(
-                ui,
-                "BRD",
-                "0x0000:0x0130".into(),
-                2,
-                p.slaves.len() as u16,
-                total,
-                "–".into(),
-                "AL status of all slaves",
-            );
-        });
-        ui.add_space(10.0);
-        sub_header(ui, "Frame usage");
-        let used = total + 2;
-        let frac = used as f32 / p.master.max_frame_data as f32;
-        ui.add(
-            egui::ProgressBar::new(frac.min(1.0))
-                .text(format!("{} of {} bytes", used, p.master.max_frame_data))
-                .desired_width(400.0),
-        );
-        ui.add_space(10.0);
+            });
+        ui.add_space(6.0);
         sub_header(ui, "Logical address map");
         egui::Grid::new("fmap").striped(true).num_columns(6).spacing([16.0, 4.0]).show(ui, |ui| {
             for h in ["Slave", "Direction", "SM", "Logical", "Length", "Physical"] {
@@ -2787,7 +2798,9 @@ impl App {
                 changed |= ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(320.0)).changed();
                 ui.end_row();
                 ui.label("Station address");
-                changed |= ui.add(egui::DragValue::new(&mut s.phys_addr).range(1..=65535)).changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut s.phys_addr).range(1..=65535).clamp_existing_to_range(false))
+                    .changed();
                 ui.end_row();
                 ui.label("Auto-increment address");
                 ui.monospace(format!("{:#06x} ({})", Project::auto_inc(i), -(i as i32)));
@@ -2842,7 +2855,14 @@ impl App {
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut s.watchdog_enabled, "Set process data watchdog").changed();
                 ui.add_enabled_ui(s.watchdog_enabled, |ui| {
-                    changed |= ui.add(egui::DragValue::new(&mut s.watchdog_ms).range(1..=6000).suffix(" ms")).changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut s.watchdog_ms)
+                                .range(1..=6000)
+                                .clamp_existing_to_range(false)
+                                .suffix(" ms"),
+                        )
+                        .changed();
                 });
             });
             ui.add_space(8.0);
@@ -3052,7 +3072,9 @@ impl App {
                         if editable {
                             changed |= ui.add(egui::DragValue::new(&mut e.index).hexadecimal(4, false, true).prefix("#x")).changed();
                             changed |= ui.add(egui::DragValue::new(&mut e.subindex)).changed();
-                            changed |= ui.add(egui::DragValue::new(&mut e.bitlen).range(1..=64)).changed();
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut e.bitlen).range(1..=64).clamp_existing_to_range(false))
+                                .changed();
                             changed |= ui.add_sized([200.0, 18.0], egui::TextEdit::singleline(&mut e.name)).changed();
                             egui::ComboBox::from_id_salt(("dt", ei))
                                 .selected_text(e.data_type.clone())
@@ -3163,10 +3185,24 @@ impl App {
                 let (a0, a1) = lim(SmKind::MBoxOut);
                 let (b0, b1) = lim(SmKind::MBoxIn);
                 ui.label("Mailbox out size (SM0)");
-                changed |= ui.add(egui::DragValue::new(&mut s.mbx_sizes.0).range(a0..=a1).suffix(" bytes")).changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut s.mbx_sizes.0)
+                            .range(a0..=a1)
+                            .clamp_existing_to_range(false)
+                            .suffix(" bytes"),
+                    )
+                    .changed();
                 ui.end_row();
                 ui.label("Mailbox in size (SM1)");
-                changed |= ui.add(egui::DragValue::new(&mut s.mbx_sizes.1).range(b0..=b1).suffix(" bytes")).changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut s.mbx_sizes.1)
+                            .range(b0..=b1)
+                            .clamp_existing_to_range(false)
+                            .suffix(" bytes"),
+                    )
+                    .changed();
                 ui.end_row();
                 if let Some(c) = &mb.coe {
                     ui.label("CoE features");
@@ -3372,7 +3408,13 @@ impl App {
                     ui.label(format!("{} ns", s.sync0_cycle(cyc)));
                 } else {
                     changed |= ui
-                        .add(egui::DragValue::new(&mut s.sync0_cycle_ns).range(1000..=100_000_000).suffix(" ns").speed(1000))
+                        .add(
+                            egui::DragValue::new(&mut s.sync0_cycle_ns)
+                                .range(1000..=100_000_000)
+                                .clamp_existing_to_range(false)
+                                .suffix(" ns")
+                                .speed(1000),
+                        )
                         .changed();
                 }
             });

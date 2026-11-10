@@ -265,49 +265,34 @@ pub fn export_eni(p: &Project) -> String {
     // ---- cyclic
     x.open("Cyclic");
     x.leaf("CycleTime", p.master.cycle_time_us);
-    x.open("Frame");
     let total = lay.out_size + lay.in_size;
-    let cyc_cmd = |x: &mut X, cmd: u8, addr: u32, len: u32, cnt: u16, inoffs: u32, outoffs: u32, comment: &str| {
-        x.open("Cmd");
-        x.leaf("State", "PREOP");
-        x.leaf("State", "SAFEOP");
-        x.leaf("State", "OP");
-        x.leaf("Comment", comment);
-        x.leaf("Cmd", cmd);
-        x.leaf("Addr", addr);
-        x.leaf("DataLength", len);
-        x.leaf("Cnt", cnt);
-        x.leaf("InputOffs", inoffs);
-        x.leaf("OutputOffs", outoffs);
-        x.close("Cmd");
-    };
-    if total > 0 {
-        if p.master.use_lrw {
-            cyc_cmd(&mut x, CMD_LRW, lay.out_log, total, lay.lrw_wkc(), 0, 0, "process data (LRW)");
-        } else {
-            if lay.out_size > 0 {
-                cyc_cmd(&mut x, CMD_LWR, lay.out_log, lay.out_size, lay.n_out_slaves, 0, 0, "outputs (LWR)");
+    for f in cyclic_frames(p, &lay) {
+        x.open("Frame");
+        for c in f.cmds.iter() {
+            x.open("Cmd");
+            x.leaf("State", "PREOP");
+            x.leaf("State", "SAFEOP");
+            x.leaf("State", "OP");
+            x.leaf("Comment", &c.comment);
+            x.leaf("Cmd", c.cmd);
+            if c.cmd == CMD_BRD {
+                x.leaf("Adp", c.addr & 0xFFFF);
+                x.leaf("Ado", c.addr >> 16);
+            } else {
+                x.leaf("Addr", c.addr);
             }
-            if lay.in_size > 0 {
-                cyc_cmd(&mut x, CMD_LRD, lay.in_log, lay.in_size, lay.n_in_slaves, lay.out_size, 0, "inputs (LRD)");
+            x.leaf("DataLength", c.len);
+            x.leaf("Cnt", c.wkc);
+            x.leaf("InputOffs", c.in_offs);
+            if c.cmd != CMD_BRD {
+                x.leaf("OutputOffs", c.out_offs);
             }
+            x.close("Cmd");
         }
+        x.close("Frame");
     }
-    // AL status of all slaves
-    x.open("Cmd");
-    x.leaf("State", "PREOP");
-    x.leaf("State", "SAFEOP");
-    x.leaf("State", "OP");
-    x.leaf("Comment", "read AL status");
-    x.leaf("Cmd", CMD_BRD);
-    x.leaf("Adp", 0);
-    x.leaf("Ado", 0x0130);
-    x.leaf("DataLength", 2);
-    x.leaf("Cnt", p.slaves.len());
-    x.leaf("InputOffs", total);
-    x.close("Cmd");
-    x.close("Frame");
     x.close("Cyclic");
+
     // ---- process image
     x.open("ProcessImage");
     x.open("Inputs");
@@ -450,7 +435,16 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
         }
         let mut lrw = false;
         let mut first_log: Option<u32> = None;
+        let mut frame_sizes: Vec<u32> = Vec::new();
+        let mut pd_cmds = 0usize;
         for f in kids(c, "Frame") {
+            frame_sizes.push(kids(f, "Cmd").fold(2u32, |acc, cmd| {
+                acc.saturating_add(12)
+                    .saturating_add(num(child(cmd, "DataLength")).clamp(0, u32::MAX as i64) as u32)
+            }));
+            pd_cmds += kids(f, "Cmd")
+                .filter(|cmd| matches!(num(child(*cmd, "Cmd")) as u8, CMD_LRW | CMD_LWR | CMD_LRD))
+                .count();
             for cmd in kids(f, "Cmd") {
                 let code = num(child(cmd, "Cmd")) as u8;
                 if matches!(code, CMD_LRW | CMD_LWR | CMD_LRD) {
@@ -463,6 +457,12 @@ fn import_eni_raw(xml: &str, lib: &EsiLibrary) -> Result<(Project, Vec<String>),
             }
         }
         p.master.use_lrw = lrw || first_log.is_none();
+        // process data was split: keep the frame size so it is split the same way again
+        if frame_sizes.len() > 1 || pd_cmds > 2 {
+            if let Some(m) = frame_sizes.iter().copied().max() {
+                p.master.max_frame_data = m.saturating_sub(14).clamp(16, ETH_PAYLOAD - 14);
+            }
+        }
         if let Some(a) = first_log {
             p.master.log_start = a;
         }
