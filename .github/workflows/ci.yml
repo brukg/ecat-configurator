@@ -57,6 +57,15 @@ jobs:
         if: runner.os == 'Linux'
         run: packaging/build-deb.sh
 
+      - name: macOS app bundle
+        if: runner.os == 'macOS'
+        run: packaging/build-macos-app.sh
+
+      - name: Windows zip
+        if: runner.os == 'Windows'
+        shell: bash
+        run: packaging/build-windows-zip.sh
+
       - name: Upload program
         uses: actions/upload-artifact@v4
         with:
@@ -68,9 +77,11 @@ jobs:
             eni.xml
           if-no-files-found: warn
 
-      - name: Upload Debian package
-        if: runner.os == 'Linux'
+      - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: debian-package
-          path: dist/*.deb
+          name: package-${{ runner.os }}
+          path: |
+            dist/*.deb
+            dist/*.zip
+          if-no-files-found: warn
