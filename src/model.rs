@@ -1832,7 +1832,7 @@ mod tests {
     fn startup_values_checked_against_dictionary() {
         let mut p = demo_project(&demo_lib());
         let k = p.slaves.iter().position(|s| s.device.type_name == "SD200").unwrap();
-        let mut bad = |idx: u16, sub: u8, data: Vec<u8>| CoeInitCmd {
+        let bad = |idx: u16, sub: u8, data: Vec<u8>| CoeInitCmd {
             transition: "PS".into(),
             index: idx,
             subindex: sub,
