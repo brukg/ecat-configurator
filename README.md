@@ -74,20 +74,22 @@ from source.
 
 ### Windows and macOS
 
-Every push is built and tested on Linux, Windows and macOS. Ready-made packages
-can be downloaded from the latest successful
-[CI run](https://github.com/brukg/ecat-configurator/actions/workflows/ci.yml)
-under *Artifacts*:
+Download the package for your system from the
+[Releases](https://github.com/brukg/ecat-configurator/releases) page:
 
-- **package-Windows**: `EtherCAT-Configurator-<version>-windows.zip`. Unzip it and
-  start `ecat-configurator.exe`; samples and the user guide are included.
-- **package-macOS**: `EtherCAT-Configurator-<version>-macos.zip` with
-  *EtherCAT Configurator.app*. It is not signed, so open it the first time with
-  right-click › *Open*.
-- **package-Linux**: the Debian package.
+- `EtherCAT-Configurator-<version>-windows.zip`: unzip it and start
+  `ecat-configurator.exe`; samples and the user guide are included.
+- `EtherCAT-Configurator-<version>-macos.zip` with *EtherCAT Configurator.app*.
+  It is not signed, so open it the first time with right-click › *Open*.
+
+Every push is also built and tested on Linux, Windows and macOS. Packages of the
+latest, unreleased state are under *Artifacts* of the newest successful
+[CI run](https://github.com/brukg/ecat-configurator/actions/workflows/ci.yml)
+(you need to be signed in to GitHub to download them).
 
 The packages are built by `packaging/build-deb.sh`, `packaging/build-macos-app.sh`
-and `packaging/build-windows-zip.sh`. The live bus scan is only available on Linux; everything
+and `packaging/build-windows-zip.sh`. Pushing a version tag such as `v0.16.1`
+makes CI publish them as a release. The live bus scan is only available on Linux; everything
 else works the same on all three systems.
 
 ### Build from source
